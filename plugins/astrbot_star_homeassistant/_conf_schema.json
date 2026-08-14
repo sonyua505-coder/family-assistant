@@ -1,0 +1,19 @@
+{
+  "api_base": {
+    "description": "家庭信息助理 API 地址",
+    "type": "string",
+    "default": "http://homeassistant-api:3000",
+    "hint": "容器内经共享网络访问，一般保持默认"
+  },
+  "api_key": {
+    "description": "X_API_KEY 访问密钥",
+    "type": "string",
+    "hint": "见 /opt/homeassistant/.env 的 X_API_KEY，勿外泄"
+  },
+  "poll_interval": {
+    "description": "outbox 轮询间隔（秒）",
+    "type": "int",
+    "default": 15,
+    "hint": "范围 5-120"
+  }
+}

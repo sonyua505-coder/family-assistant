@@ -1,0 +1,18 @@
+name: astrbot_star_homeassistant
+display_name: 家庭信息助理
+short_desc: 通过 LLM 工具调用家庭信息助理 API：身份、记账、outbox 主动推送
+desc: >-
+  家庭信息助理系统（QQ 接入层，M7）。让 QQ 机器人通过 LLM 工具调用
+  家庭信息助理后端（homeassistant-api）：身份登记/绑定、记账（单笔/列表/统计）、
+  outbox 主动消息轮询推送。身份由插件按消息事件注入（x-platform/x-openid），
+  不靠 LLM 猜测。
+help: 直接对话即可记账，例如「记一笔：午饭 30 元」「上周花了多少」。
+version: 0.1.0
+author: HEIHEI
+repo: https://github.com/sonyua505-coder/homeassistant
+astrbot_version: ">=4.22.1"
+tags:
+  - 记账
+  - 家庭
+  - API
+  - 工具

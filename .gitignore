@@ -17,6 +17,10 @@ backup/
 *.log
 logs/
 
+# Python（AstrBot 插件）
+__pycache__/
+*.pyc
+
 # 部署配置（本地不跟踪、不执行，由云端自持；磁盘保留作参考）
 Dockerfile
 docker-compose.yml

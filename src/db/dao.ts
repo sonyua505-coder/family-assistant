@@ -11,6 +11,11 @@ export function now(): string {
   return `${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())} ${p(d.getHours())}:${p(d.getMinutes())}:${p(d.getSeconds())}`;
 }
 
+/** 今天日期串 "YYYY-MM-DD"（本地时区，与 now() 同源）。 */
+export function today(): string {
+  return now().slice(0, 10);
+}
+
 export function parseJson<T>(s: string | null | undefined, fallback: T): T {
   if (!s) return fallback;
   try {

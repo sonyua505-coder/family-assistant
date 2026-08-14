@@ -22,7 +22,7 @@ npm run dev             # 开发（tsx watch，默认 http://127.0.0.1:3000）
 
 - M0 ✅ 项目骨架 + db 层（迁移/表注册/DAO/settings）+ /healthz —— 本地
 - M1 ✅ 身份与账户（persons/identities/accounts + 身份注入中间件）—— 本地
-- M2 记账核心（bills CRUD/AA/stats/batch/日志）—— 本地
+- M2 ✅ 记账核心（bills CRUD/软删回收站/AA/stats/batch/changes/日志）—— 本地
 - M3 调度 + outbox —— 本地
 - M4 任务/订阅新闻/记忆//fetch —— 本地
 - M5 记账 Web 服务（token 门控）—— 本地

@@ -11,6 +11,9 @@ import { registerSystemRoutes } from './modules/system/routes.js';
 import { registerInternalRoutes } from './modules/internal/routes.js';
 import { registerBillsRoutes } from './modules/bills/routes.js';
 import { registerOutboxRoutes } from './modules/outbox/routes.js';
+import { registerNewsRoutes } from './modules/news/routes.js';
+import { registerTasksRoutes } from './modules/tasks/routes.js';
+import { registerMemoryRoutes } from './modules/memory/routes.js';
 
 export interface AppDeps {
   db: Database.Database;
@@ -70,6 +73,9 @@ export function buildApp({ db, registry, config }: AppDeps): FastifyInstance {
   });
   app.register(registerBillsRoutes, { db, identity: { requireIdentity, requireBoundPerson } });
   app.register(registerOutboxRoutes, { db, apiKey: config.apiKey });
+  app.register(registerNewsRoutes, { db, identity: { requireIdentity, requireBoundPerson } });
+  app.register(registerTasksRoutes, { db, identity: { requireIdentity, requireBoundPerson } });
+  app.register(registerMemoryRoutes, { db, identity: { requireIdentity, requireBoundPerson } });
   app.register(registerInternalRoutes, { registry, adminKey: config.adminKey });
 
   return app;

@@ -229,6 +229,27 @@ export async function registerSystemRoutes(app: FastifyInstance, deps: SystemRou
   });
 
   // ──────────────────────────────────────────────
+  // 画像 / 人设（M4）—— 仅 QQ Agent 每次对话前注入（ADR D13/D23）
+  // ──────────────────────────────────────────────
+
+  // 读当前注入身份的画像文本（persons.profile_text）；未绑定返回空串
+  app.get('/api/v1/profile', { preHandler: [onAuth, requireIdentity] }, async (req) => {
+    const id = req.identity!;
+    if (id.personId === null) return { profile_text: '' };
+    const person = getPerson(db, id.personId)!;
+    return { profile_text: person.profile_text };
+  });
+
+  // 设置画像文本（写 persons.profile_text；设计文档未列路由，为可用性补的扩展）
+  app.patch('/api/v1/persons/me/profile', { preHandler: [onAuth, requireBoundPerson] }, async (req) => {
+    const id = req.identity!;
+    const body = req.body as { profile_text?: unknown };
+    const text = typeof body.profile_text === 'string' ? body.profile_text : '';
+    db.prepare('UPDATE persons SET profile_text = ?, updated_at = datetime(\'now\',\'localtime\') WHERE id = ?').run(text, id.personId!);
+    return { ok: true, profile_text: text };
+  });
+
+  // ──────────────────────────────────────────────
   // 账户（M1）—— 工具 create_account / list_my_accounts / join_account
   // ──────────────────────────────────────────────
 

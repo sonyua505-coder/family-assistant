@@ -17,6 +17,8 @@ import { getSettingBool, getSettingDefault } from '../modules/system/settings.js
 import { enqueue } from '../modules/outbox/index.js';
 import { sweepTerminal } from '../modules/outbox/service.js';
 import { billChanges, type ChangeSummary } from '../modules/bills/bills.js';
+import { cleanupOldNews, runSubscriptionFetch } from '../modules/news/service.js';
+import type { SubscriptionRow } from '../modules/news/subscriptions.js';
 
 // ── 辅助 ──
 
@@ -259,4 +261,31 @@ function formatDailyBrief(
 /** 扫描 failed+attempts>=3 的终态记录并告警（去重）。返回本次新告警条数。 */
 export function runOutboxSweep(db: Database.Database): number {
   return sweepTerminal(db);
+}
+
+// ── 任务：订阅抓取（news_fetch，每 6 小时）与缓存清理（news_cleanup，每小时）──
+
+/**
+ * 遍历全部启用订阅，调对应适配器抓取并去重写 news_cache。
+ * 单个订阅失败只记日志不中断（网络超时/站点改版都要能扛）。返回成功抓取的订阅数。
+ */
+export async function runNewsFetch(db: Database.Database): Promise<number> {
+  const subs = db.prepare('SELECT * FROM subscriptions WHERE enabled = 1').all() as SubscriptionRow[];
+  let ok = 0;
+  for (const sub of subs) {
+    try {
+      const stats = await runSubscriptionFetch(db, sub);
+      console.log(`[news_fetch] ${sub.name}: total=${stats.total} new=${stats.new} dup=${stats.dup}`);
+      ok++;
+    } catch (err) {
+      console.warn(`[news_fetch] ${sub.name} 失败: ${(err as Error).message}`);
+    }
+  }
+  return ok;
+}
+
+/** 清理超期新闻缓存（settings.news_retention_days，默认 4 天）。返回删除条数。 */
+export function runNewsCleanup(db: Database.Database): number {
+  const days = Number(getSettingDefault(db, 'news_retention_days', '4')) || 4;
+  return cleanupOldNews(db, days);
 }

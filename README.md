@@ -24,7 +24,7 @@ npm run dev             # 开发（tsx watch，默认 http://127.0.0.1:3000）
 - M1 ✅ 身份与账户（persons/identities/accounts + 身份注入中间件）—— 本地
 - M2 ✅ 记账核心（bills CRUD/软删回收站/AA/stats/batch/changes/日志）—— 本地
 - M3 ✅ 调度 + outbox（node-cron + 生产/消费/回执 + bill_digest/reminder/daily_brief）—— 本地
-- M4 任务/订阅新闻/记忆//fetch —— 本地
+- M4 ✅ 任务/订阅/新闻/记忆//fetch 抓取（含 4 个外部适配器 rss/steam/delta/free_game）—— 本地
 - M5 记账 Web 服务（token 门控）—— 本地
 - M6 云端部署（Docker Compose + ZeroTier）—— 云端
 - M7 AstrBot 插件 —— 云端

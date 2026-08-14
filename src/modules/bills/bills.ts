@@ -13,7 +13,11 @@
 import type Database from 'better-sqlite3';
 import { now, parseJson, today } from '../../db/dao.js';
 import { AppError } from '../../lib/errors.js';
-import { getAccount, isAccountMember, listAccountsForPerson } from '../system/accounts.js';
+import { listAccountsForPerson, resolveAccountId } from '../system/accounts.js';
+
+// 账户归属解析（D26）已上移到 system/accounts.ts（bills 与 tasks 共用），这里透传导出，
+// 避免已有 bills 路由的 import 路径改动。
+export { resolveAccountId };
 
 // ── 常量 ──
 
@@ -118,28 +122,6 @@ function validateFields(patch: { type?: unknown; amount?: unknown; category?: un
   if (patch.occurred_at !== undefined) {
     normalizeOccurredAt(patch.occurred_at as string); // 非法会抛 400
   }
-}
-
-// ── 账户归属（D26）──
-
-/**
- * 解析记账目标账户：
- *  - 给了 account_id → 校验当前 person 有访问权（个人账本=owner，家庭账本=成员），无权则 403。
- *  - 没给 → 当前 person 唯一可用账户；0 个报 NO_ACCOUNT，多个报 ACCOUNT_AMBIGUOUS（让 LLM 反问）。
- */
-export function resolveAccountId(db: Database.Database, personId: number, accountId?: number): number {
-  if (accountId !== undefined) {
-    const account = getAccount(db, accountId);
-    if (!account) throw new AppError(404, 'ACCOUNT_NOT_FOUND', '找不到该账本');
-    const accessible =
-      account.type === 'personal' ? account.owner_person_id === personId : isAccountMember(db, accountId, personId);
-    if (!accessible) throw new AppError(403, 'FORBIDDEN', '无权访问该账本');
-    return account.id;
-  }
-  const accounts = listAccountsForPerson(db, personId);
-  if (accounts.length === 0) throw new AppError(400, 'NO_ACCOUNT', '还没有任何账本，请先创建');
-  if (accounts.length > 1) throw new AppError(409, 'ACCOUNT_AMBIGUOUS', '有多个可用账本，请指定 account_id');
-  return accounts[0]!.id;
 }
 
 // ── 查询 ──

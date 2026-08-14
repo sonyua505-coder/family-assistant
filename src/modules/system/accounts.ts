@@ -6,6 +6,7 @@
  *  - family（家庭账本）：owner 自动成为成员，他人可 join 加入，全家共享。
  */
 import type Database from 'better-sqlite3';
+import { AppError } from '../../lib/errors.js';
 
 export interface AccountRow {
   id: number;
@@ -98,6 +99,26 @@ export function addFamilyMember(db: Database.Database, accountId: number, person
   db.prepare(
     'INSERT OR IGNORE INTO account_members (account_id, person_id, role) VALUES (?, ?, ?)',
   ).run(accountId, personId, 'member');
+}
+
+/**
+ * 解析"记账/任务目标账户"（D26，bills 与 tasks 共用）：
+ *  - 给了 account_id → 校验当前 person 有访问权（个人账本=owner，家庭账本=成员），无权则 403。
+ *  - 没给 → 当前 person 唯一可用账户；0 个报 NO_ACCOUNT，多个报 ACCOUNT_AMBIGUOUS（让 LLM 反问）。
+ */
+export function resolveAccountId(db: Database.Database, personId: number, accountId?: number): number {
+  if (accountId !== undefined) {
+    const account = getAccount(db, accountId);
+    if (!account) throw new AppError(404, 'ACCOUNT_NOT_FOUND', '找不到该账本');
+    const accessible =
+      account.type === 'personal' ? account.owner_person_id === personId : isAccountMember(db, accountId, personId);
+    if (!accessible) throw new AppError(403, 'FORBIDDEN', '无权访问该账本');
+    return account.id;
+  }
+  const accounts = listAccountsForPerson(db, personId);
+  if (accounts.length === 0) throw new AppError(400, 'NO_ACCOUNT', '还没有任何账本，请先创建');
+  if (accounts.length > 1) throw new AppError(409, 'ACCOUNT_AMBIGUOUS', '有多个可用账本，请指定 account_id');
+  return accounts[0]!.id;
 }
 
 /**

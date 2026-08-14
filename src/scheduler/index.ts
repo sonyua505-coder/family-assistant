@@ -6,7 +6,7 @@
  */
 import cron from 'node-cron';
 import type Database from 'better-sqlite3';
-import { runBillDigest, runDailyBrief, runOutboxSweep, runReminderDue } from './tasks.js';
+import { runBillDigest, runDailyBrief, runNewsCleanup, runNewsFetch, runOutboxSweep, runReminderDue } from './tasks.js';
 
 export interface SchedulerDeps {
   db: Database.Database;
@@ -16,10 +16,10 @@ export interface SchedulerDeps {
   timezone?: string;
 }
 
-/** 包一层 try/catch：单个任务失败只记日志，不让 cron 循环崩掉。 */
-function safeRun(name: string, fn: () => number, log: (msg: string) => void): void {
+/** 包一层 try/catch（支持 async）：单个任务失败只记日志，不让 cron 循环崩掉。 */
+async function safeRun(name: string, fn: () => number | Promise<number>, log: (msg: string) => void): Promise<void> {
   try {
-    const n = fn();
+    const n = await fn();
     if (n > 0) log(`[scheduler:${name}] 完成 ${n} 条`);
   } catch (err) {
     log(`[scheduler:${name}] 失败: ${(err as Error).message}`);
@@ -59,7 +59,17 @@ export class Scheduler {
 
     // outbox 终态清理：每 10 分钟
     this.jobs.push(
-      cron.schedule('*/10 * * * *', () => safeRun('outbox_sweep', () => runOutboxSweep(this.db), this.log), opts),
+      cron.schedule('*/10 * * * *', () => void safeRun('outbox_sweep', () => runOutboxSweep(this.db), this.log), opts),
+    );
+
+    // 订阅抓取：每 6 小时（异步，单订阅失败不中断）
+    this.jobs.push(
+      cron.schedule('0 */6 * * *', () => void safeRun('news_fetch', () => runNewsFetch(this.db), this.log), opts),
+    );
+
+    // 新闻缓存清理：每小时
+    this.jobs.push(
+      cron.schedule('0 * * * *', () => void safeRun('news_cleanup', () => runNewsCleanup(this.db), this.log), opts),
     );
   }
 

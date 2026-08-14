@@ -1,0 +1,43 @@
+<h1>待收清单（AA）</h1>
+
+<% if (accounts.length === 0) { %>
+  <div class="empty">还没有账本。</div>
+<% } else { %>
+
+<form class="toolbar" method="get" action="/w/<%= token %>/aa">
+  <select name="account_id">
+    <% accounts.forEach(function(a){ %>
+      <option value="<%= a.id %>" <%= a.id === accountId ? 'selected' : '' %>><%= a.name %></option>
+    <% }) %>
+  </select>
+  <button>切换</button>
+</form>
+
+<% if (pending.length === 0) { %>
+  <div class="empty">没有待收款项，全部结清。</div>
+<% } else { %>
+<table>
+<tr><th>日期</th><th>备注</th><th>金额</th><th>垫付人</th><th>待收</th><% if (mode === 'write') { %><th>操作</th><% } %></tr>
+<% pending.forEach(function(p){ %>
+  <% p.unpaid.forEach(function(u){ %>
+  <tr>
+    <td><%= p.occurred_at %></td>
+    <td><%= p.note %></td>
+    <td class="amount expense"><%= p.amountYuan %></td>
+    <td><%= p.payer %></td>
+    <td><%= u %></td>
+    <% if (mode === 'write') { %>
+    <td>
+      <form class="inline" method="post" action="/w/<%= token %>/bills/<%= p.id %>/settle">
+        <input type="hidden" name="participant_name" value="<%= u %>">
+        <button>已收到</button>
+      </form>
+    </td>
+    <% } %>
+  </tr>
+  <% }) %>
+<% }) %>
+</table>
+<% } %>
+
+<% } %>

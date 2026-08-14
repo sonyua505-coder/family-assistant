@@ -1,0 +1,23 @@
+<h1>账本总览</h1>
+<% if (accounts.length === 0) { %>
+  <div class="empty">还没有账本。请先在机器人里创建账本（家庭 / 个人），再回来查看。</div>
+<% } else { %>
+  <% accounts.forEach(function(a){ %>
+    <div class="card">
+      <h2><%= a.name %>
+        <span class="badge <%= a.type === 'family' ? 'settled' : 'pending' %>"><%= a.type === 'family' ? '家庭账本' : '个人账本' %></span>
+        <span class="muted">（<%= a.role %>）</span>
+      </h2>
+      <div class="toolbar">
+        <span>本月收入 <b class="amount income"><%= a.income %></b> 元</span>
+        <span>本月支出 <b class="amount expense"><%= a.expense %></b> 元</span>
+      </div>
+      <div class="toolbar">
+        <a href="/w/<%= token %>/bills?account_id=<%= a.id %>"><button class="ghost">账单</button></a>
+        <a href="/w/<%= token %>/stats?account_id=<%= a.id %>"><button class="ghost">统计</button></a>
+        <a href="/w/<%= token %>/aa?account_id=<%= a.id %>"><button class="ghost">待收</button></a>
+        <a href="/w/<%= token %>/export?account_id=<%= a.id %>"><button class="ghost">导出CSV</button></a>
+      </div>
+    </div>
+  <% }) %>
+<% } %>

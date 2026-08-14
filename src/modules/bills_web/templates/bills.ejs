@@ -1,0 +1,89 @@
+<h1>账单</h1>
+
+<% if (error) { %><div class="error"><%= error %></div><% } %>
+
+<% if (accounts.length === 0) { %>
+  <div class="empty">还没有账本。</div>
+<% } else { %>
+
+<form class="toolbar" method="get" action="/w/<%= token %>/bills">
+  <select name="account_id">
+    <% accounts.forEach(function(a){ %>
+      <option value="<%= a.id %>" <%= a.id === accountId ? 'selected' : '' %>><%= a.name %></option>
+    <% }) %>
+  </select>
+  <input type="month" name="month" value="<%= month %>" placeholder="月份">
+  <select name="category">
+    <option value="">全部分类</option>
+    <% categories.forEach(function(c){ %>
+      <option value="<%= c %>" <%= c === category ? 'selected' : '' %>><%= c %></option>
+    <% }) %>
+  </select>
+  <select name="type">
+    <option value="">收支</option>
+    <option value="expense" <%= type === 'expense' ? 'selected' : '' %>>支出</option>
+    <option value="income" <%= type === 'income' ? 'selected' : '' %>>收入</option>
+  </select>
+  <button>筛选</button>
+</form>
+
+<% if (mode === 'write') { %>
+<div class="card">
+  <h2>记一笔</h2>
+  <form method="post" action="/w/<%= token %>/bills">
+    <input type="hidden" name="account_id" value="<%= accountId %>">
+    <div class="toolbar">
+      <select name="type">
+        <option value="expense">支出</option>
+        <option value="income">收入</option>
+      </select>
+      <input type="number" name="amount" step="0.01" min="0.01" placeholder="金额（元）" required>
+      <select name="category">
+        <% categories.forEach(function(c){ %><option value="<%= c %>"><%= c %></option><% }) %>
+      </select>
+      <input type="text" name="note" placeholder="备注">
+      <input type="text" name="participants" placeholder="AA参与人，逗号分隔（可选）">
+      <input type="date" name="occurred_at">
+      <button>记一笔</button>
+    </div>
+  </form>
+</div>
+<% } %>
+
+<% if (items.length === 0) { %>
+  <div class="empty">暂无账单</div>
+<% } else { %>
+<table>
+<tr><th>日期</th><th>分类</th><th>备注</th><th>金额</th><th>状态</th><th>参与人</th><% if (mode === 'write') { %><th>操作</th><% } %></tr>
+<% items.forEach(function(b){ %>
+<tr>
+  <td><%= b.occurred_at %></td>
+  <td><%= b.category %></td>
+  <td><%= b.note %></td>
+  <td class="amount <%= b.type === 'income' ? 'income' : 'expense' %>"><%= b.type === 'income' ? '+' : '-' %><%= b.amountYuan %></td>
+  <td><span class="badge <%= b.status %>"><%= b.status === 'pending' ? '待结算' : '已结清' %></span></td>
+  <td class="muted"><%= b.participantsText %></td>
+  <% if (mode === 'write') { %>
+  <td>
+    <form class="inline" method="post" action="/w/<%= token %>/bills/<%= b.id %>/delete">
+      <button class="danger" title="软删除，可回收站恢复">删</button>
+    </form>
+    <% if (b.status === 'pending') { %>
+      <form class="inline" method="post" action="/w/<%= token %>/bills/<%= b.id %>/settle">
+        <input type="hidden" name="all" value="1">
+        <button title="全部参与人已付">全部结算</button>
+      </form>
+    <% } %>
+  </td>
+  <% } %>
+</tr>
+<% }) %>
+</table>
+<div class="pager">
+  <% if (page > 1) { %><a href="<%= pagerHref(page - 1) %>">上一页</a><% } %>
+  <span>第 <%= page %> 页 / 共 <%= total %> 条</span>
+  <% if (items.length === pageSize) { %><a href="<%= pagerHref(page + 1) %>">下一页</a><% } %>
+</div>
+<% } %>
+
+<% } %>

@@ -14,6 +14,7 @@ import { registerOutboxRoutes } from './modules/outbox/routes.js';
 import { registerNewsRoutes } from './modules/news/routes.js';
 import { registerTasksRoutes } from './modules/tasks/routes.js';
 import { registerMemoryRoutes } from './modules/memory/routes.js';
+import { registerBillsWebRoutes } from './modules/bills_web/routes.js';
 
 export interface AppDeps {
   db: Database.Database;
@@ -26,6 +27,12 @@ export function buildApp({ db, registry, config }: AppDeps): FastifyInstance {
   const app = Fastify({
     logger: {
       level: config.logLevel,
+      serializers: {
+        // 记账 Web 令牌不落日志（§9：/w/* 访问日志对 token 脱敏）
+        req(request: { method: string; url: string }) {
+          return { method: request.method, url: request.url.replace(/\/w\/[0-9a-f]{64}/gi, '/w/<redacted>') };
+        },
+      },
       ...(isDev
         ? {
             transport: {
@@ -54,6 +61,17 @@ export function buildApp({ db, registry, config }: AppDeps): FastifyInstance {
     void reply.code(status).send({ code, message: anyErr.message ?? 'Internal server error' });
   });
 
+  // 宽容 JSON 解析：空 body + application/json（常见于无 body 的 DELETE）解析成 {}，
+  // 而非 Fastify 默认的 "Body cannot be empty" 400。缺字段由各路由的业务校验兜底。
+  app.addContentTypeParser('application/json', { parseAs: 'string' }, (_req, body, done) => {
+    if (body === '' || body === undefined) return done(null, {});
+    try {
+      done(null, JSON.parse(body as string));
+    } catch (err) {
+      done(err as Error);
+    }
+  });
+
   // 健康检查（无鉴权，供 compose healthcheck）
   app.get('/healthz', async () => {
     db.prepare('SELECT 1').get();
@@ -76,6 +94,7 @@ export function buildApp({ db, registry, config }: AppDeps): FastifyInstance {
   app.register(registerNewsRoutes, { db, identity: { requireIdentity, requireBoundPerson } });
   app.register(registerTasksRoutes, { db, identity: { requireIdentity, requireBoundPerson } });
   app.register(registerMemoryRoutes, { db, identity: { requireIdentity, requireBoundPerson } });
+  app.register(registerBillsWebRoutes, { db, apiKey: config.apiKey, config, identity: { requireIdentity, requireBoundPerson } });
   app.register(registerInternalRoutes, { registry, adminKey: config.adminKey });
 
   return app;

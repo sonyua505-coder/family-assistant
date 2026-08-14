@@ -1,0 +1,65 @@
+<h1>统计</h1>
+
+<% if (accounts.length === 0) { %>
+  <div class="empty">还没有账本。</div>
+<% } else { %>
+
+<form class="toolbar" method="get" action="/w/<%= token %>/stats">
+  <select name="account_id">
+    <% accounts.forEach(function(a){ %>
+      <option value="<%= a.id %>" <%= a.id === accountId ? 'selected' : '' %>><%= a.name %></option>
+    <% }) %>
+  </select>
+  <input type="number" name="year" min="2000" max="2100" value="<%= year %>" placeholder="年份">
+  <select name="month">
+    <option value="">全年</option>
+    <% for (let m = 1; m <= 12; m++) { %>
+      <option value="<%= m %>" <%= m === month ? 'selected' : '' %>><%= m %>月</option>
+    <% } %>
+  </select>
+  <button>查看</button>
+</form>
+
+<div class="card">
+  <span>收入 <b class="amount income"><%= income %></b> 元</span>
+  <span style="margin-left:20px">支出 <b class="amount expense"><%= expense %></b> 元</span>
+  <span style="margin-left:20px">结余 <b class="amount <%= income - expense >= 0 ? 'income' : 'expense' %>"><%= (income - expense).toFixed(income - expense % 1 ? 2 : 0) %></b> 元</span>
+</div>
+
+<div class="card">
+  <h2>支出分类</h2>
+  <% if (byCategory.length === 0) { %><div class="empty">暂无数据</div><% } else { %>
+  <% let max = 0; byCategory.forEach(function(c){ if (c.amount > max) max = c.amount; }); %>
+  <table>
+    <tr><th>分类</th><th>金额</th><th>笔数</th><th style="width:40%">占比</th></tr>
+    <% byCategory.forEach(function(c){ %>
+    <tr>
+      <td><%= c.category %></td>
+      <td class="amount"><%= c.amountYuan %></td>
+      <td><%= c.count %></td>
+      <td><div class="bar" style="width:<%= max ? Math.round(c.amount / max * 100) : 0 %>%"></div></td>
+    </tr>
+    <% }) %>
+  </table>
+  <% } %>
+</div>
+
+<div class="card">
+  <h2>月度趋势</h2>
+  <% if (trend.length === 0) { %><div class="empty">暂无数据</div><% } else { %>
+  <% let tmax = 0; trend.forEach(function(t){ if (t.expense > tmax) tmax = t.expense; }); %>
+  <table>
+    <tr><th>月份</th><th>收入</th><th>支出</th><th style="width:40%">支出走势</th></tr>
+    <% trend.forEach(function(t){ %>
+    <tr>
+      <td><%= t.month %></td>
+      <td class="amount income"><%= t.incomeYuan %></td>
+      <td class="amount expense"><%= t.expenseYuan %></td>
+      <td><div class="bar" style="width:<%= tmax ? Math.round(t.expense / tmax * 100) : 0 %>%"></div></td>
+    </tr>
+    <% }) %>
+  </table>
+  <% } %>
+</div>
+
+<% } %>

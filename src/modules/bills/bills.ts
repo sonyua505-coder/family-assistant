@@ -215,6 +215,27 @@ export function listBills(db: Database.Database, accountId: number, q: BillListQ
   return { items: rows.map(toOut), total, page, page_size: pageSize };
 }
 
+/** CSV 导出用：账户内全部未删除账单（可选日期区间，无分页上限）。 */
+export function exportBills(
+  db: Database.Database,
+  accountId: number,
+  range?: { from?: string; to?: string },
+): BillRow[] {
+  const conds = ['account_id = ?', 'is_deleted = 0'];
+  const args: unknown[] = [accountId];
+  if (range?.from) {
+    conds.push('occurred_at >= ?');
+    args.push(`${range.from} 00:00:00`);
+  }
+  if (range?.to) {
+    conds.push('occurred_at <= ?');
+    args.push(`${range.to} 23:59:59`);
+  }
+  return db
+    .prepare(`SELECT * FROM bills WHERE ${conds.join(' AND ')} ORDER BY occurred_at, id`)
+    .all(...args) as BillRow[];
+}
+
 // ── 写操作 ──
 
 /** 建一笔账单。participants 非空 → status=pending（AA 单），否则 settled。返回新 id。 */

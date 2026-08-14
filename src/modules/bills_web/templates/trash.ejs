@@ -1,0 +1,40 @@
+<h1>回收站</h1>
+
+<% if (accounts.length === 0) { %>
+  <div class="empty">还没有账本。</div>
+<% } else { %>
+
+<form class="toolbar" method="get" action="/w/<%= token %>/trash">
+  <select name="account_id">
+    <% accounts.forEach(function(a){ %>
+      <option value="<%= a.id %>" <%= a.id === accountId ? 'selected' : '' %>><%= a.name %></option>
+    <% }) %>
+  </select>
+  <button>切换</button>
+</form>
+
+<% if (items.length === 0) { %>
+  <div class="empty">回收站为空。</div>
+<% } else { %>
+<table>
+<tr><th>删除时间</th><th>日期</th><th>备注</th><th>分类</th><th>金额</th><% if (mode === 'write') { %><th>操作</th><% } %></tr>
+<% items.forEach(function(b){ %>
+<tr>
+  <td><%= b.deleted_at %></td>
+  <td><%= b.occurred_at %></td>
+  <td><%= b.note %></td>
+  <td><%= b.category %></td>
+  <td class="amount <%= b.type === 'income' ? 'income' : 'expense' %>"><%= b.type === 'income' ? '+' : '-' %><%= b.amountYuan %></td>
+  <% if (mode === 'write') { %>
+  <td>
+    <form class="inline" method="post" action="/w/<%= token %>/bills/<%= b.id %>/restore">
+      <button>恢复</button>
+    </form>
+  </td>
+  <% } %>
+</tr>
+<% }) %>
+</table>
+<% } %>
+
+<% } %>

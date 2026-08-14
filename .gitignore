@@ -16,3 +16,9 @@ backup/
 # 日志
 *.log
 logs/
+
+# 部署配置（本地不跟踪、不执行，由云端自持；磁盘保留作参考）
+Dockerfile
+docker-compose.yml
+.dockerignore
+deploy/

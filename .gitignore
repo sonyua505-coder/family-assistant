@@ -1,0 +1,18 @@
+# 依赖与构建产物
+node_modules/
+dist/
+
+# 环境变量（铁律：.env 不提交，X_API_KEY 只存在于服务器 .env）
+.env
+.env.local
+
+# 数据与备份（SQLite 文件、冷备）
+data/
+backup/
+*.db
+*.db-shm
+*.db-wal
+
+# 日志
+*.log
+logs/

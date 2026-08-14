@@ -262,6 +262,65 @@ class HomeAssistantStar(Star):
         state = "已全部结清" if b.get("status") == "settled" else "仍待结算"
         return f"账单#{b.get('id')}：{state}。参与人：{b.get('participants')}"
 
+    @filter.llm_tool(name="update_bill")
+    async def update_bill(
+        self,
+        event: AstrMessageEvent,
+        bill_id: int,
+        type: str = None,
+        amount: float = None,
+        category: str = None,
+        note: str = None,
+        participants: list = None,
+    ) -> str:
+        """修改一笔已记录的账单（只需传要改的字段，其他不变）。
+
+        Args:
+            bill_id(number): 账单 id（来自记账或查账结果的 #id）。
+            type(string): income 或 expense（可选）。
+            amount(number): 金额（分）（可选）。
+            category(string): 分类（可选）。
+            note(string): 备注（可选）。
+            participants(array): AA 参与者名单（可选）。
+        """
+        body = {}
+        if type:
+            body["type"] = type
+        if amount is not None:
+            body["amount"] = int(amount)
+        if category:
+            body["category"] = category
+        if note:
+            body["note"] = note
+        if participants:
+            body["participants"] = self._normalize_participants(participants)
+        data = await self._api(
+            "PATCH", f"api/v1/bills/{bill_id}",
+            identity=self._identity(event), json_body=body,
+        )
+        if not data.get("ok", True):
+            return f"修改失败：{data.get('body') or data.get('error') or data}"
+        b = data.get("bill") or {}
+        kind = "支出" if b.get("type") == "expense" else "收入"
+        return (
+            f"已修改#{b.get('id')}：{kind} {b.get('amount')}分 "
+            f"（{b.get('category') or '未分类'}）备注：{b.get('note') or '无'}"
+        )
+
+    @filter.llm_tool(name="delete_bill")
+    async def delete_bill(self, event: AstrMessageEvent, bill_id: int) -> str:
+        """删除一笔账单（软删除，进回收站，可恢复）。
+
+        Args:
+            bill_id(number): 账单 id。
+        """
+        data = await self._api(
+            "DELETE", f"api/v1/bills/{bill_id}", identity=self._identity(event),
+        )
+        if not data.get("ok", True):
+            return f"删除失败：{data.get('body') or data.get('error') or data}"
+        return f"已删除账单#{bill_id}（进了回收站，如需恢复可再说）。"
+
     @staticmethod
     def _normalize_participants(participants: list) -> list:
         """把 LLM 可能给出的 ["张三","李四"] 或 [{"name":"张三"}] 归一成 API 需要的 [{"name":...}]。"""

@@ -200,14 +200,14 @@ class HomeAssistantStar(Star):
         participants: list = None,
         account_id: int = None,
     ) -> str:
-        """记录一笔账（单笔直记，记错了可让用户再说明修改）。
+        """记录一笔账（单笔直记；AA/平摊时务必把参与者列出，之后可再结算）。
 
         Args:
             type(string): income 或 expense（收入/支出）。
             amount(number): 金额（单位：分，1 元 = 100 分）。
             category(string): 分类，如 餐饮/交通/购物。
             note(string): 备注。
-            participants(array): AA 分摊参与者名字列表（可选）。
+            participants(array): AA 分摊的参与者名字列表，如 ["张三","李四"]。用户说「AA」「平摊」「垫付」时先问清参与者有谁再传；只有一人/无分摊则不传。
             account_id(number): 记账账户 id，用户有多个账本时必须指定。
         """
         body = {"type": type, "amount": int(amount)}
@@ -216,7 +216,7 @@ class HomeAssistantStar(Star):
         if note:
             body["note"] = note
         if participants:
-            body["participants"] = participants
+            body["participants"] = self._normalize_participants(participants)
         if account_id:
             body["account_id"] = account_id
         data = await self._api(
@@ -226,10 +226,52 @@ class HomeAssistantStar(Star):
             return f"记账失败：{data.get('body') or data.get('error') or data}"
         b = data.get("bill") or {}
         kind = "支出" if b.get("type") == "expense" else "收入"
+        aa = "（AA 待结算）" if b.get("status") == "pending" else ""
         return (
-            f"已记录：{kind} {b.get('amount')}分 "
-            f"（{b.get('category') or '未分类'}）备注：{b.get('note') or '无'}"
+            f"已记录#{b.get('id')}：{kind} {b.get('amount')}分 "
+            f"（{b.get('category') or '未分类'}）{aa}备注：{b.get('note') or '无'}"
         )
+
+    @filter.llm_tool(name="settle_bill")
+    async def settle_bill(
+        self,
+        event: AstrMessageEvent,
+        bill_id: int,
+        participant_name: str = None,
+        all: bool = False,
+    ) -> str:
+        """结算一笔 AA 账单（标记某参与人已付款，或一次性全部结清）。
+
+        Args:
+            bill_id(number): 账单 id（来自记账或查账结果的 #id）。
+            participant_name(string): 要结算的参与人名字（可选）。
+            all(boolean): 是否全部结清（可选，默认 false）。
+        """
+        body = {}
+        if participant_name:
+            body["participant_name"] = participant_name
+        if all:
+            body["all"] = True
+        data = await self._api(
+            "POST", f"api/v1/bills/{bill_id}/settle",
+            identity=self._identity(event), json_body=body,
+        )
+        if not data.get("ok", True):
+            return f"结算失败：{data.get('body') or data.get('error') or data}"
+        b = data.get("bill") or {}
+        state = "已全部结清" if b.get("status") == "settled" else "仍待结算"
+        return f"账单#{b.get('id')}：{state}。参与人：{b.get('participants')}"
+
+    @staticmethod
+    def _normalize_participants(participants: list) -> list:
+        """把 LLM 可能给出的 ["张三","李四"] 或 [{"name":"张三"}] 归一成 API 需要的 [{"name":...}]。"""
+        out = []
+        for p in participants:
+            if isinstance(p, str) and p.strip():
+                out.append({"name": p.strip()})
+            elif isinstance(p, dict) and p.get("name"):
+                out.append({"name": p["name"]})
+        return out
 
     @filter.llm_tool(name="list_bills")
     async def list_bills(
@@ -262,7 +304,7 @@ class HomeAssistantStar(Star):
         for it in items[:10]:
             kind = "支出" if it.get("type") == "expense" else "收入"
             lines.append(
-                f"{it.get('occurred_at', '')} {kind} {it.get('amount')}分 "
+                f"#{it.get('id')} {it.get('occurred_at', '')} {kind} {it.get('amount')}分 "
                 f"{it.get('category') or ''} {it.get('note') or ''}"
             )
         return "最近账单：\n" + "\n".join(lines)

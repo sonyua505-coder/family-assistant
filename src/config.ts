@@ -12,6 +12,8 @@ export interface Config {
   ztIp: string;
   publicWebBase: string;
   logLevel: string;
+  /** 是否启动调度器（测试/调试可设 false） */
+  schedulerEnabled: boolean;
 }
 
 export function loadConfig(env: NodeJS.ProcessEnv = process.env): Config {
@@ -25,6 +27,7 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): Config {
     ztIp: env.ZT_IP ?? '127.0.0.1',
     publicWebBase: env.PUBLIC_WEB_BASE ?? 'http://127.0.0.1:8081',
     logLevel: env.LOG_LEVEL ?? 'info',
+    schedulerEnabled: env.SCHEDULER_ENABLED !== 'false',
   };
   if (!cfg.apiKey) throw new Error('缺少 X_API_KEY（.env）');
   if (!cfg.adminKey) throw new Error('缺少 ADMIN_KEY（.env）');

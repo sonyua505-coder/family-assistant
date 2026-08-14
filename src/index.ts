@@ -7,6 +7,7 @@ import { openDb } from './db/index.js';
 import { applyMigrations } from './db/migrations.js';
 import { TableRegistry } from './db/registry.js';
 import { buildApp } from './app.js';
+import { Scheduler } from './scheduler/index.js';
 
 async function main(): Promise<void> {
   const config = loadConfig();
@@ -19,8 +20,16 @@ async function main(): Promise<void> {
 
   const app = buildApp({ db, registry, config });
 
+  // 调度器（SCHEDULER_ENABLED=false 可关闭，测试/调试用）
+  const scheduler = new Scheduler({ db, log: (msg) => app.log.info(msg) });
+  if (config.schedulerEnabled) {
+    scheduler.start();
+    app.log.info('调度器已启动（reminder/bill_digest/daily_brief/outbox_sweep）');
+  }
+
   const shutdown = async (signal: string): Promise<void> => {
     app.log.info({ signal }, 'shutting down');
+    scheduler.stop();
     try {
       await app.close();
     } finally {

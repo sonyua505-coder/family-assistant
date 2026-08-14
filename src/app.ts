@@ -10,6 +10,7 @@ import { createIdentityHooks } from './lib/identity.js';
 import { registerSystemRoutes } from './modules/system/routes.js';
 import { registerInternalRoutes } from './modules/internal/routes.js';
 import { registerBillsRoutes } from './modules/bills/routes.js';
+import { registerOutboxRoutes } from './modules/outbox/routes.js';
 
 export interface AppDeps {
   db: Database.Database;
@@ -68,6 +69,7 @@ export function buildApp({ db, registry, config }: AppDeps): FastifyInstance {
     identity: { requireIdentity, requireBoundPerson },
   });
   app.register(registerBillsRoutes, { db, identity: { requireIdentity, requireBoundPerson } });
+  app.register(registerOutboxRoutes, { db, apiKey: config.apiKey });
   app.register(registerInternalRoutes, { registry, adminKey: config.adminKey });
 
   return app;

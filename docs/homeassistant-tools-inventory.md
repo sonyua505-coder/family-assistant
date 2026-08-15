@@ -1,0 +1,131 @@
+# 家庭信息助理 · AstrBot 插件 LLM 工具清单（实测）
+
+> 来源：云端运行态 `/opt/homeassistant/plugins/astrbot_star_homeassistant/main.py`
+> 整理日期：2026-08-15
+> 用途：本地设计文档的权威对照。**新增工具不得与下表重名/同义**；本地要加新工具时，先在文档里追加条目再开发，避免云端部署时撞名。
+
+## 0. 插件骨架（非工具，但契约相关）
+
+| 项 | 实现 |
+|----|------|
+| 插件名 | `astrbot_star_homeassistant`（display: 家庭信息助理） |
+| 配置 | `api_base`（默认 `http://homeassistant-api:3000`）、`api_key`（=X_API_KEY）、`poll_interval`（默认 15s） |
+| 身份注入 | 插件按入站事件自动加 `x-platform=qq`、`x-openid=发送者openid`，**不是 LLM 参数** |
+| 会话捕获 | `@filter.regex(r".*")` 记录 openid→UMO 映射，供主动推送定位会话 |
+| outbox 主动推送 | 后台轮询 `GET /api/v1/outbox/pending?channel=qq&limit=10` → `context.send_message` → 回执 `POST /api/v1/outbox/{id}/delivery` |
+| 平台 id | 从 UMO 首段推断（qq_official），无命中时按 `{platform}:FriendMessage:{openid}` 构造 C2C 会话 |
+
+## 1. 工具总表（36 个）
+
+| # | 工具名 | 功能 | 后端端点 |
+|---|--------|------|----------|
+| 1 | `get_my_identity` | 查询当前用户身份 + 可用账本 | GET `api/v1/identity` |
+| 2 | `create_person` | 登记身份（首用引导，幂等） | POST `api/v1/persons` |
+| 3 | `create_account` | 创建记账账户 | POST `api/v1/accounts` |
+| 4 | `list_my_accounts` | 列出当前用户账本 | GET `api/v1/accounts` |
+| 5 | `add_bill` | 单笔记账 | POST `api/v1/bills` |
+| 6 | `add_bills` | 批量补录账单 | POST `api/v1/bills/batch` |
+| 7 | `update_bill` | 修改账单 | PATCH `api/v1/bills/{id}` |
+| 8 | `delete_bill` | 删除账单（软删进回收站） | DELETE `api/v1/bills/{id}` |
+| 9 | `list_bill_trash` | 列出回收站账单 | GET `api/v1/bills/trash` |
+| 10 | `restore_bill` | 从回收站恢复账单 | POST `api/v1/bills/{id}/restore` |
+| 11 | `get_bill` | 查询单笔账单完整详情 | GET `api/v1/bills/{id}` |
+| 12 | `settle_bill` | AA 结算 | POST `api/v1/bills/{id}/settle` |
+| 13 | `list_bills` | 列出最近账单 | GET `api/v1/bills` |
+| 14 | `query_bill_stats` | 账单收支统计 | GET `api/v1/bills/stats` |
+| 15 | `query_bill_changes` | 某天账单变动汇总 | GET `api/v1/bills/changes` |
+| 16 | `add_task` | 添加待办 | POST `api/v1/tasks` |
+| 17 | `list_tasks` | 列出待办 | GET `api/v1/tasks` |
+| 18 | `complete_task` | 完成待办 | POST `api/v1/tasks/{id}/done` |
+| 19 | `undo_task` | 改回未完成 | POST `api/v1/tasks/{id}/undo` |
+| 20 | `update_task` | 修改待办 | PATCH `api/v1/tasks/{id}` |
+| 21 | `delete_task` | 删除待办 | DELETE `api/v1/tasks/{id}` |
+| 22 | `subscribe_source` | 订阅信息源 | POST `api/v1/subscriptions` |
+| 23 | `list_subscriptions` | 列出订阅源 | GET `api/v1/subscriptions` |
+| 24 | `unsubscribe` | 退订 | DELETE `api/v1/subscriptions/{id}` |
+| 25 | `query_news` | 查已缓存新闻 | GET `api/v1/news` |
+| 26 | `remember` | 记住用户记忆 | POST `api/v1/memories` |
+| 27 | `search_memory` | 检索记忆 | GET `api/v1/memories` |
+| 28 | `forget` | 删除记忆 | DELETE `api/v1/memories/{id}` |
+| 29 | `fetch_source` | 实时抓取信息源 | POST `api/v1/fetch` |
+| 30 | `bind_person` | 绑定已有账号 | POST `api/v1/persons/{id}/bind` |
+| 31 | `join_account` | 加入家庭账本 | POST `api/v1/accounts/{id}/join` |
+| 32 | `unbind_identity` | 解绑平台身份 | DELETE `api/v1/persons/{id}/identities/{platform}/{openid}` |
+| 33 | `set_primary_identity` | 切换主身份 | PATCH `api/v1/persons/me/primary-identity` |
+| 34 | `create_ledger_link` | 生成账本网页链接 | POST `api/v1/web/tokens` |
+| 35 | `list_ledger_links` | 列出已生成账本链接 | GET `api/v1/web/tokens` |
+| 36 | `revoke_ledger_link` | 撤销账本链接 | DELETE `api/v1/web/tokens/{id}` |
+
+## 2. 各工具 LLM 参数签名
+
+参数均走 LLM 工具签名（snake_case），`?` 为可选。
+
+### 身份域
+- `get_my_identity()` — 无参数。返回是否已登记 + 名字 + 可用账本
+- `create_person(display_name: string)` — 首用引导，幂等
+- `bind_person(person_id: int)` — 绑到已有账号
+- `unbind_identity(person_id: int, platform: str, openid: str)` — platform ∈ {qq, wechat}
+- `set_primary_identity(platform: str, openid: str)`
+
+### 账本域
+- `create_account(type: str="personal", name: str?)` — type ∈ {personal, family}
+- `list_my_accounts()`
+- `join_account(account_id: int)`
+
+### 记账域
+- `add_bill(type: str, amount: float, category?: str, note?: str, participants?: list, account_id?: int)` — type ∈ {income, expense}
+- `add_bills(bills: list, account_id?: int)` — bills 元素 {type, amount, category?, note?, occurred_at?, participants?}
+- `update_bill(bill_id: int, type?: str, amount?: float, category?: str, note?: str, participants?: list)`
+- `delete_bill(bill_id: int)` — 软删；回复指引可 `list_bill_trash`/`restore_bill` 反悔
+- `list_bill_trash(account_id?: int)` — 回收站列表
+- `restore_bill(bill_id: int)` — 从回收站恢复
+- `get_bill(bill_id: int)` — 单笔完整详情（参与人/备注/发生时间/状态）
+- `settle_bill(bill_id: int, participant_name?: str, all?: bool)`
+- `list_bills(account_id?: int, month?: str)` — month 格式 YYYY-MM
+- `query_bill_stats(year?: int, month?: int, account_id?: int)`
+- `query_bill_changes(date?: str)` — date 格式 YYYY-MM-DD
+
+### 待办域
+- `add_task(content: str, category?: str, remind_at?: str, account_id?: int)` — remind_at 格式 YYYY-MM-DD HH:MM
+- `list_tasks(is_done?: bool, account_id?: int)`
+- `complete_task(task_id: int)`
+- `undo_task(task_id: int)` — 误标完成时改回未完成
+- `update_task(task_id: int, content?: str, category?: str, remind_at?: str)`
+- `delete_task(task_id: int)`
+
+### 订阅/新闻域
+- `subscribe_source(source_type: str, name?: str, source_url?: str, preset_key?: str)` — source_type ∈ {rss, preset}
+- `list_subscriptions()`
+- `unsubscribe(subscription_id: int)`
+- `query_news(subscription_id?: int, limit?: int)`
+
+### 记忆域
+- `remember(content: str, category?: str)`
+- `search_memory(q?: str)` — q 空则列最近
+- `forget(memory_id: int)`
+
+### 抓取域
+- `fetch_source(source_type: str, source_url?: str, preset_key?: str, params?: dict)` — source_type ∈ {rss, url, preset}
+
+### 账本链接域
+- `create_ledger_link(mode: str="read", expires_in?: int)` — mode ∈ {read, write}，expires_in 分钟 1-1440
+- `list_ledger_links()` — 列出已生成链接及过期状态
+- `revoke_ledger_link(token_id: int)`
+
+## 3. 契约要点（LLM 工具签名层的硬约束）
+
+1. **金额单位是「分」**：`amount` 工具层强制 `int(amount)`，1 元 = 100 分。所有返回里的金额也带「分」字。
+2. **AA 分摊**：`add_bill` 带 `participants`（名字数组）→ 账单 `status=pending` → `settle_bill` 结算。用户说「AA/平摊/垫付」时要先问清参与者再传。
+3. **多账本歧义**：用户有多个账本时，记账/查账/待办必须传 `account_id`，否则后端返回 ACCOUNT_AMBIGUOUS，由 LLM 引导指定。
+4. **软删除闭环**：`delete_bill` 进回收站；`list_bill_trash` 查看、`restore_bill` 恢复（2026-08-15 补齐）。
+5. **日期格式**：`month`=YYYY-MM、`date`=YYYY-MM-DD、`remind_at`=YYYY-MM-DD HH:MM。
+6. **source_type 因工具而异**：`subscribe_source` 只收 rss|preset；`fetch_source` 收 rss|url|preset。
+7. **身份不在 LLM 参数里**：x-platform/x-openid 由插件注入，LLM 猜不到也传不了——本地设计文档不要设计「让 LLM 传身份」的工具。
+8. **`get_my_identity` 未登记时返回引导语**，引导链：create_person → create_account → add_bill。
+
+## 4. 新工具开发约定（写进本地文档）
+
+- 新增工具**先确认不与上表 36 个重名**（含语义相同仅改名的，如已有 `add_bill` 就别再写 `record_bill`/`log_expense`）。
+- 每个工具 = `@filter.llm_tool(name="...")` + async 方法 + **带 Args 的 docstring**（AstrBot 用 docstring 生成 LLM 工具描述，参数名/类型/单位/枚举都要写清楚）。
+- 走 `self._api(method, path, identity=self._identity(event), json_body=...)`，统一错误返回为失败字典。
+- 工具描述里写明行为约定（如 add_bill 的 AA 规则、participants 格式），LLM 靠描述触发正确调用。

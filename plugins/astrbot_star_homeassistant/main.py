@@ -7,12 +7,13 @@
     x-openid=消息发送者 openid，见 src/lib/identity.ts）。
   - 账本：create_account / list_my_accounts / join_account。
   - 记账：add_bill / add_bills(批量) / update_bill / delete_bill / settle_bill /
-    list_bills / query_bill_stats / query_bill_changes（含 AA 分摊）。
-  - 待办：add_task / list_tasks / complete_task / update_task / delete_task。
+    list_bills / get_bill / list_bill_trash / restore_bill / query_bill_stats /
+    query_bill_changes（含 AA 分摊）。
+  - 待办：add_task / list_tasks / complete_task / undo_task / update_task / delete_task。
   - 订阅/新闻：subscribe_source / list_subscriptions / unsubscribe / query_news。
   - 记忆：remember / search_memory / forget。
   - 抓取：fetch_source（SSRF 白名单由后端把关）。
-  - 账本链接：create_ledger_link / revoke_ledger_link。
+  - 账本链接：create_ledger_link / list_ledger_links / revoke_ledger_link。
   - outbox：后台轮询 /api/v1/outbox/pending?channel=qq，经
     context.send_message(umo, ...) 主动推送到 QQ（C2C 无需 msg_id，
     见 qqofficial 适配器 _send_by_session_common），并回报 sent/failed。
@@ -327,7 +328,51 @@ class HomeAssistantStar(Star):
         )
         if not data.get("ok", True):
             return f"删除失败：{data.get('body') or data.get('error') or data}"
-        return f"已删除账单#{bill_id}（进了回收站，如需恢复可再说）。"
+        return f"已删除账单#{bill_id}（进了回收站，可 list_bill_trash 查看、restore_bill 恢复）。"
+
+    @filter.llm_tool(name="list_bill_trash")
+    async def list_bill_trash(self, event: AstrMessageEvent, account_id: int = None) -> str:
+        """列出回收站里的账单（软删除、尚未恢复的）。
+
+        Args:
+            account_id(number): 记账账户 id（用户有多个账本时必须指定）。
+        """
+        qs = f"?account_id={account_id}" if account_id else ""
+        data = await self._api(
+            "GET", f"api/v1/bills/trash{qs}", identity=self._identity(event),
+        )
+        if not data.get("ok", True):
+            return f"查询失败：{data.get('body') or data.get('error') or data}"
+        items = data.get("items") or []
+        if not items:
+            return "回收站是空的。"
+        lines = []
+        for it in items[:10]:
+            kind = "支出" if it.get("type") == "expense" else "收入"
+            lines.append(
+                f"#{it.get('id')} {kind} {it.get('amount')}分 "
+                f"{it.get('category') or ''} {it.get('note') or ''}"
+            )
+        return "回收站账单（可用 restore_bill 恢复）：\n" + "\n".join(lines)
+
+    @filter.llm_tool(name="restore_bill")
+    async def restore_bill(self, event: AstrMessageEvent, bill_id: int) -> str:
+        """从回收站恢复一笔已删除的账单（软删除可反悔）。
+
+        Args:
+            bill_id(number): 账单 id（来自 delete_bill 的 #id 或回收站列表）。
+        """
+        data = await self._api(
+            "POST", f"api/v1/bills/{bill_id}/restore", identity=self._identity(event),
+        )
+        if not data.get("ok", True):
+            return f"恢复失败：{data.get('body') or data.get('error') or data}"
+        b = data.get("bill") or {}
+        kind = "支出" if b.get("type") == "expense" else "收入"
+        return (
+            f"已恢复账单#{b.get('id')}：{kind} {b.get('amount')}分 "
+            f"（{b.get('category') or '未分类'}）"
+        )
 
     @staticmethod
     def _normalize_participants(participants: list) -> list:
@@ -375,6 +420,33 @@ class HomeAssistantStar(Star):
                 f"{it.get('category') or ''} {it.get('note') or ''}"
             )
         return "最近账单：\n" + "\n".join(lines)
+
+    @filter.llm_tool(name="get_bill")
+    async def get_bill(self, event: AstrMessageEvent, bill_id: int) -> str:
+        """查询一笔账单的完整详情（含参与人、备注、发生时间）。
+
+        Args:
+            bill_id(number): 账单 id（来自记账或查账结果的 #id）。
+        """
+        data = await self._api(
+            "GET", f"api/v1/bills/{bill_id}", identity=self._identity(event),
+        )
+        if not data.get("ok", True):
+            return f"查询失败：{data.get('body') or data.get('error') or data}"
+        parts = [f"#{data.get('id')}"]
+        kind = "支出" if data.get("type") == "expense" else "收入"
+        parts.append(f"{kind} {data.get('amount')}分")
+        if data.get("category"):
+            parts.append(f"分类:{data.get('category')}")
+        if data.get("note"):
+            parts.append(f"备注:{data.get('note')}")
+        if data.get("occurred_at"):
+            parts.append(f"时间:{data.get('occurred_at')}")
+        if data.get("participants"):
+            parts.append(f"参与人:{data.get('participants')}")
+        if data.get("status"):
+            parts.append(f"状态:{data.get('status')}")
+        return "账单详情：" + "，".join(parts)
 
     @filter.llm_tool(name="query_bill_stats")
     async def query_bill_stats(
@@ -540,6 +612,20 @@ class HomeAssistantStar(Star):
         if not data.get("ok", True):
             return f"操作失败：{data.get('body') or data.get('error') or data}"
         return f"已完成事项#{task_id}。"
+
+    @filter.llm_tool(name="undo_task")
+    async def undo_task(self, event: AstrMessageEvent, task_id: int) -> str:
+        """把一条已完成待办改回未完成（误点完成时可反悔）。
+
+        Args:
+            task_id(number): 事项 id。
+        """
+        data = await self._api(
+            "POST", f"api/v1/tasks/{task_id}/undo", identity=self._identity(event),
+        )
+        if not data.get("ok", True):
+            return f"操作失败：{data.get('body') or data.get('error') or data}"
+        return f"已把事项#{task_id} 改回未完成。"
 
     @filter.llm_tool(name="update_task")
     async def update_task(
@@ -887,6 +973,28 @@ class HomeAssistantStar(Star):
         if not data.get("ok", True):
             return f"撤销失败：{data.get('body') or data.get('error') or data}"
         return f"已撤销链接#{token_id}。"
+
+    @filter.llm_tool(name="list_ledger_links")
+    async def list_ledger_links(self, event: AstrMessageEvent) -> str:
+        """列出当前用户已生成的账本网页链接（含过期状态）。
+
+        Args:
+        """
+        data = await self._api(
+            "GET", "api/v1/web/tokens", identity=self._identity(event),
+        )
+        if not data.get("ok", True):
+            return f"查询失败：{data.get('body') or data.get('error') or data}"
+        tokens = data.get("tokens") or []
+        if not tokens:
+            return "还没有生成过账本链接。"
+        lines = []
+        for t in tokens[:10]:
+            state = "已过期" if t.get("is_expired") else "有效"
+            lines.append(
+                f"#{t.get('id')} {t.get('mode')} {state} 过期:{t.get('expires_at')}"
+            )
+        return "账本链接：\n" + "\n".join(lines)
 
     # ────────────────────────── outbox 轮询 ──────────────────────────
 

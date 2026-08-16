@@ -1,2 +1,4 @@
 # AstrBot 核心已内置 httpx，这里显式声明以防环境差异
 httpx>=0.24
+# 统计图表渲染（懒加载；需重启 astrbot 后由 AstrBot 自动 pip 安装）
+matplotlib>=3.8

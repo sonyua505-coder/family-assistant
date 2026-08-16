@@ -24,13 +24,23 @@
   poll_interval outbox 轮询间隔秒数
 """
 import asyncio
+import csv
+import io
+import os
+import uuid
+from datetime import datetime
+from pathlib import Path
+from urllib.parse import urlencode
 
 import httpx
 
 from astrbot.api import logger
 from astrbot.api.event import AstrMessageEvent, filter
+from astrbot.api.message_components import File
 from astrbot.api.star import Context, Star
 from astrbot.core.message.message_event_result import MessageChain
+from astrbot.core.utils.astrbot_path import get_astrbot_temp_path, get_astrbot_workspaces_path
+from astrbot.core.workspace import normalize_umo_for_workspace
 
 DEFAULT_API_BASE = "http://homeassistant-api:3000"
 DEFAULT_POLL_INTERVAL = 15
@@ -52,15 +62,47 @@ class HomeAssistantStar(Star):
         self._platform_id: str | None = None
         self._outbox_task: asyncio.Task | None = None
 
+    # 新 bill_stats / export_bills 上线后，验证期间按配置停用的旧查询/统计工具
+    LEGACY_QUERY_TOOLS = [
+        "list_bills",
+        "get_bill",
+        "query_bill_stats",
+        "query_bill_changes",
+        "list_bill_trash",
+        "restore_bill",
+    ]
+
     # ────────────────────────── 生命周期 ──────────────────────────
 
     async def initialize(self) -> None:
-        """插件激活时启动 outbox 轮询（官方建议在 initialize 里起后台任务）。"""
+        """插件激活时按配置调整旧工具启停，并启动 outbox 轮询。"""
+        self._apply_legacy_tool_policy()
         self._outbox_task = asyncio.create_task(self._outbox_loop())
         logger.info(
             f"[HomeAssistant] 插件已激活 api_base={self.api_base} "
             f"poll_interval={self.poll_interval}s"
         )
+
+    def _apply_legacy_tool_policy(self) -> None:
+        """按 disable_legacy_query_tools 配置停用/启用旧查询统计工具。
+
+        deactivate/activate_llm_tool 均幂等：停用状态持久化到
+        shared_preferences 的 inactivated_llm_tools，重启自动恢复。
+        """
+        disable = bool(self.config.get("disable_legacy_query_tools", False))
+        action = "停用" if disable else "启用"
+        for name in self.LEGACY_QUERY_TOOLS:
+            try:
+                ok = (
+                    self.context.deactivate_llm_tool(name)
+                    if disable
+                    else self.context.activate_llm_tool(name)
+                )
+                logger.info(f"[HomeAssistant] {action}旧查询工具 {name}: ok={ok}")
+            except ValueError as e:  # activate 在所属插件被禁用时会抛
+                logger.warning(f"[HomeAssistant] 调整工具 {name} 被拒绝: {e}")
+            except Exception as e:
+                logger.warning(f"[HomeAssistant] 调整工具 {name} 失败: {e}")
 
     async def terminate(self) -> None:
         if self._outbox_task:
@@ -97,6 +139,137 @@ class HomeAssistantStar(Star):
     @staticmethod
     def _identity(event: AstrMessageEvent):
         return ("qq", event.get_sender_id())
+
+    @staticmethod
+    def _err_msg(data: dict) -> str:
+        """把后端失败响应转成对用户友好的一句话。"""
+        body = data.get("body") or data.get("error") or str(data)
+        if "ACCOUNT_AMBIGUOUS" in str(body):
+            return "你有多个账本，请先 list_my_accounts 查看账本 id，再带上 account_id 重试。"
+        return f"操作失败：{body}"
+
+    async def _api_raw(self, method: str, path: str, *, identity=None, json_body=None):
+        """调 homeassistant API 并返回 (status_code, body_text)；网络异常返回失败 dict。
+
+        _api 只支持 JSON 响应；导出 CSV 是纯文本，需要走这个原始接口。
+        """
+        headers = {"Authorization": f"Bearer {self.api_key}"}
+        if identity:
+            headers["x-platform"] = identity[0]
+            headers["x-openid"] = identity[1]
+        url = f"{self.api_base}/{path.lstrip('/')}"
+        try:
+            async with httpx.AsyncClient(timeout=60) as client:  # 导出可能较慢，放宽超时
+                resp = await client.request(method, url, json=json_body, headers=headers)
+            return resp.status_code, resp.text
+        except Exception as e:
+            logger.error(f"[HomeAssistant] 请求失败 {method} {path}: {e}")
+            return {"ok": False, "error": str(e)}
+
+    def _workspace_root(self, event: AstrMessageEvent) -> Path:
+        """当前会话工作区根目录（resolve 后），按 unified_msg_origin 隔离。"""
+        root = Path(get_astrbot_workspaces_path()) / normalize_umo_for_workspace(
+            event.unified_msg_origin
+        )
+        return root.resolve()
+
+    def _resolve_workspace_rel(self, event: AstrMessageEvent, relative_path: str) -> Path:
+        """把相对路径补全到会话工作区，并校验不越界（容器 root 无沙箱，必须插件自查）。"""
+        rel = str(relative_path).strip().replace("\\", "/")
+        if not rel or rel.startswith("/") or Path(rel).is_absolute():
+            raise ValueError("必须是工作区内的相对路径")
+        root = self._workspace_root(event)
+        target = (root / rel).resolve()
+        if target == root or not target.is_relative_to(root):
+            raise ValueError(f"路径越界：{relative_path}")
+        return target
+
+    def _ensure_matplotlib(self) -> bool:
+        """懒加载 matplotlib（Agg 后端 + 中文字体注册），失败返回 False。
+
+        容器无显示、装失败不影响插件加载，故绝不在模块顶层 import。
+        """
+        if getattr(self, "_mpl_ok", None) is not None:
+            return self._mpl_ok
+        try:
+            import matplotlib
+
+            matplotlib.use("Agg")  # 容器无显示，必须用非交互后端
+            from matplotlib import font_manager, pyplot as plt
+
+            self._plt = plt
+            font_path = os.path.join(
+                os.path.dirname(os.path.abspath(__file__)), "fonts", "wqy-microhei.ttc"
+            )
+            if os.path.exists(font_path):
+                font_manager.fontManager.addfont(font_path)
+                family = font_manager.FontProperties(fname=font_path).get_name()
+                plt.rcParams["font.family"] = [family, "DejaVu Sans"]
+            else:
+                logger.warning("[HomeAssistant] 中文字体缺失，图表中文可能显示为方块")
+            plt.rcParams["axes.unicode_minus"] = False  # 修复负号显示
+            self._mpl_ok = True
+            return True
+        except Exception as e:
+            logger.error(f"[HomeAssistant] matplotlib 初始化失败: {e}")
+            self._mpl_ok = False
+            return False
+
+    def _render_stats_png(self, stats: dict, period: str, out_path: str) -> None:
+        """渲染统计图（CPU 密集，经 asyncio.to_thread 调用；金额单位：元，仅供用户看图）。
+
+        一张 PNG 两个 subplot：左=支出分类构成（横向条形，Top6+其他），右=收支趋势（分组柱状）。
+        qqofficial 一条消息只支持一个 Image，故合成单张。
+        """
+        import numpy as np
+
+        plt = self._plt
+        by_cat = [c for c in (stats.get("by_category") or []) if c.get("amount")]
+        by_cat.sort(key=lambda c: c["amount"], reverse=True)
+        trend = stats.get("trend") or []
+
+        fig, (ax1, ax2) = plt.subplots(1, 2, figsize=(12, 5), dpi=150)
+        fig.suptitle(f"家庭信息助理 · 收支统计 {period}", fontsize=13)
+
+        # 左：支出分类构成 —— 横向条形图（part-to-whole 用条形，小屏标签可读）
+        if by_cat:
+            top = by_cat[:6]
+            labels = [c["category"] for c in top]
+            vals = [c["amount"] / 100 for c in top]
+            rest = sum(c["amount"] for c in by_cat[6:]) / 100
+            if rest > 0:
+                labels.append("其他")
+                vals.append(rest)
+            y = np.arange(len(vals))[::-1]
+            ax1.barh(y, vals, color="#2a78d6", height=0.62)
+            ax1.set_yticks(y, labels)
+            ax1.set_title("支出分类构成（元）")
+            for yi, v in zip(y, vals):
+                ax1.text(v, yi, f"{v:,.0f}", va="center", ha="left", fontsize=9)
+            ax1.tick_params(axis="x", labelsize=8)
+        else:
+            ax1.text(0.5, 0.5, "暂无分类数据", ha="center", va="center", transform=ax1.transAxes)
+
+        # 右：收支趋势 —— 分组柱状（收入蓝 / 支出橙）
+        if trend:
+            months = [t.get("month", "") for t in trend]
+            inc = [t.get("income", 0) / 100 for t in trend]
+            exp = [t.get("expense", 0) / 100 for t in trend]
+            x = np.arange(len(months))
+            w = 0.36
+            b1 = ax2.bar(x - w / 2, inc, w, color="#2a78d6", label="收入")
+            b2 = ax2.bar(x + w / 2, exp, w, color="#eb6834", label="支出")
+            ax2.set_xticks(x, months, rotation=30, ha="right", fontsize=8)
+            ax2.set_ylabel("元")
+            ax2.legend(frameon=False)
+            ax2.bar_label(b1, fontsize=8, padding=2)
+            ax2.bar_label(b2, fontsize=8, padding=2)
+        else:
+            ax2.text(0.5, 0.5, "暂无趋势数据", ha="center", va="center", transform=ax2.transAxes)
+
+        fig.tight_layout(rect=[0, 0, 1, 0.95])
+        fig.savefig(out_path, bbox_inches="tight", facecolor="white")
+        plt.close(fig)
 
     # ────────────────────────── 会话注册 ──────────────────────────
 
@@ -995,6 +1168,239 @@ class HomeAssistantStar(Star):
                 f"#{t.get('id')} {t.get('mode')} {state} 过期:{t.get('expires_at')}"
             )
         return "账本链接：\n" + "\n".join(lines)
+
+    # ────────────────────────── 统计 / 导出（方向 A） ──────────────────────────
+
+    @filter.llm_tool(name="bill_stats")
+    async def bill_stats(
+        self,
+        event: AstrMessageEvent,
+        year: int = None,
+        month: int = None,
+        from_date: str = None,
+        to_date: str = None,
+        category: str = None,
+        amount_min: int = None,
+        amount_max: int = None,
+        account_id: int = None,
+        chart: bool = True,
+    ) -> str:
+        """查询收支统计（可含图表）。按年份/月份/日期区间/分类/金额区间筛选；chart=True 时把统计图（支出构成+收支趋势）直接发给你。
+
+        Args:
+            year(number): 年份，如 2026（可选）。
+            month(number): 月份 1-12，需配合 year（可选）。
+            from_date(string): 起始日期 YYYY-MM-DD，优先于 year/month（可选）。
+            to_date(string): 结束日期 YYYY-MM-DD，与 from_date 成对（可选）。
+            category(string): 只看某一分类，如 餐饮（可选）。
+            amount_min(number): 金额下限（单位：分，1 元 = 100 分）（可选）。
+            amount_max(number): 金额上限（单位：分，1 元 = 100 分）（可选）。
+            account_id(number): 记账账户 id（有多个账本时必须指定，否则返回 409）。
+            chart(boolean): 是否同时生成并发送统计图，默认 true。
+        """
+        params = {}
+        if year:
+            params["year"] = year
+        if month:
+            params["month"] = month
+        if from_date:
+            params["from"] = from_date
+        if to_date:
+            params["to"] = to_date
+        if category:
+            params["category"] = category
+        if amount_min is not None:
+            params["amount_min"] = amount_min
+        if amount_max is not None:
+            params["amount_max"] = amount_max
+        if account_id:
+            params["account_id"] = account_id
+        qs = urlencode(params)
+        data = await self._api(
+            "GET", f"api/v1/bills/stats/range?{qs}", identity=self._identity(event)
+        )
+        if not data.get("ok", True):
+            return self._err_msg(data)
+        income = int(data.get("income") or 0)
+        expense = int(data.get("expense") or 0)
+        net = int(data.get("net") or 0)
+        by_cat = data.get("by_category") or []
+        trend = data.get("trend") or []
+        applied = data.get("applied") or {}
+
+        if income == 0 and expense == 0:
+            return "该筛选区间暂无账单。"
+
+        lines = ["收支统计："]
+        lines.append(f"收入 {income} 分 / 支出 {expense} 分 / 结余 {net} 分")
+        top = sorted(
+            [c for c in by_cat if c.get("amount")],
+            key=lambda c: c["amount"],
+            reverse=True,
+        )[:5]
+        if top:
+            lines.append(
+                "支出分类 Top：" + "、".join(
+                    f"{c['category']} {c['amount']}分({c.get('count', 0)}笔)"
+                    for c in top
+                )
+            )
+            if len(by_cat) > 5:
+                lines.append(f"…共 {len(by_cat)} 个分类")
+        if trend:
+            lines.append(
+                "趋势：" + "；".join(
+                    f"{t.get('month', '')} 收{t.get('income', 0)}/支{t.get('expense', 0)}"
+                    for t in trend
+                )
+            )
+        if applied:
+            lines.append(f"已生效筛选：{applied}")
+        text = "\n".join(lines)
+
+        if chart and (income > 0 or expense > 0):
+            if not self._ensure_matplotlib():
+                return text + "\n（图表生成失败，仅返回文字）"
+            png = os.path.join(get_astrbot_temp_path(), f"ha_stats_{uuid.uuid4().hex}.png")
+            try:
+                # 渲染是 CPU 密集，丢到线程池避免卡住事件循环
+                await asyncio.to_thread(self._render_stats_png, data, str(applied or {}), png)
+                caption = f"收支统计（单位：元）· 结余 {net / 100:,.2f} 元"
+                await self.context.send_message(
+                    event.unified_msg_origin,
+                    MessageChain().message(caption).file_image(png),
+                )
+            except Exception as e:
+                logger.error(f"[HomeAssistant] 发送统计图失败: {e}")
+            finally:
+                if os.path.exists(png):
+                    os.remove(png)
+        return text
+
+    @filter.llm_tool(name="export_bills")
+    async def export_bills(
+        self,
+        event: AstrMessageEvent,
+        type: str = None,
+        category: str = None,
+        status: str = None,
+        participant: str = None,
+        month: str = None,
+        year: int = None,
+        from_date: str = None,
+        to_date: str = None,
+        amount_min: int = None,
+        amount_max: int = None,
+        account_id: int = None,
+        destination: str = "workspace",
+        relative_path: str = None,
+    ) -> str:
+        """把账单导出为 CSV 文件。默认存到当前会话工作区（供 BOT 进一步处理后再发送），也可直接发文件给你或两者都做。
+
+        Args:
+            type(string): income 或 expense（可选）。
+            category(string): 分类筛选，如 餐饮（可选）。
+            status(string): 状态筛选，settled 或 pending（可选）。
+            participant(string): 参与人名字筛选（可选）。
+            month(string): 月份 YYYY-MM（可选）。
+            year(number): 年份（可选）。
+            from_date(string): 起始日期 YYYY-MM-DD（可选）。
+            to_date(string): 结束日期 YYYY-MM-DD（可选）。
+            amount_min(number): 金额下限（单位：分，1 元 = 100 分）（可选）。
+            amount_max(number): 金额上限（单位：分，1 元 = 100 分）（可选）。
+            account_id(number): 记账账户 id（有多个账本时必须指定）。
+            destination(string): workspace=只存会话工作区；user=直接把 CSV 文件发给你；both=既存工作区又发文件。默认 workspace。
+            relative_path(string): 工作区内的相对路径，如 exports/家庭账单.csv（可选，默认自动命名）。
+        """
+        params = {"format": "csv"}
+        if type:
+            params["type"] = type
+        if category:
+            params["category"] = category
+        if status:
+            params["status"] = status
+        if participant:
+            params["participant"] = participant
+        if month:
+            params["month"] = month
+        if year:
+            params["year"] = year
+        if from_date:
+            params["from"] = from_date
+        if to_date:
+            params["to"] = to_date
+        if amount_min is not None:
+            params["amount_min"] = amount_min
+        if amount_max is not None:
+            params["amount_max"] = amount_max
+        if account_id:
+            params["account_id"] = account_id
+        qs = urlencode(params)
+
+        ret = await self._api_raw(
+            "GET", f"api/v1/bills/export?{qs}", identity=self._identity(event)
+        )
+        if isinstance(ret, dict):
+            return self._err_msg(ret)
+        http_status, csv_text = ret
+        if http_status >= 400:
+            return f"导出失败（HTTP {http_status}）：{csv_text[:300]}"
+        if not isinstance(csv_text, str) or not csv_text.strip():
+            return "导出失败：后端返回空内容。"
+        try:
+            # 用 csv.reader 精确统计行数（正确处理带引号换行的字段），不进 LLM 上下文
+            row_count = max(0, sum(1 for _ in csv.reader(io.StringIO(csv_text))) - 1)
+        except Exception:
+            row_count = 0
+
+        ws_path = None
+        if destination in ("workspace", "both"):
+            try:
+                if relative_path:
+                    target = self._resolve_workspace_rel(event, relative_path)
+                else:
+                    target = (
+                        self._workspace_root(event)
+                        / "exports"
+                        / f"bills_{datetime.now():%Y%m%d_%H%M%S}.csv"
+                    )
+                target.parent.mkdir(parents=True, exist_ok=True)
+                with open(target, "w", encoding="utf-8", newline="") as f:
+                    f.write(csv_text)  # csv_text 自带 UTF-8 BOM
+                ws_path = target.relative_to(self._workspace_root(event)).as_posix()
+            except ValueError as e:
+                return f"无效路径：{e}"
+
+        if destination in ("user", "both"):
+            filename = (
+                os.path.basename(ws_path)
+                if ws_path
+                else f"bills_{datetime.now():%Y%m%d_%H%M%S}.csv"
+            )
+            tmp = os.path.join(get_astrbot_temp_path(), f"ha_export_{uuid.uuid4().hex}.csv")
+            with open(tmp, "w", encoding="utf-8", newline="") as f:
+                f.write(csv_text)
+            try:
+                ok = await self.context.send_message(
+                    event.unified_msg_origin,
+                    MessageChain([File(name=filename, file=tmp)]),
+                )
+                if not ok:
+                    return f"文件已生成但发送失败（未匹配到平台）。工作区副本：{ws_path or filename}"
+            finally:
+                if os.path.exists(tmp):
+                    os.remove(tmp)
+
+        applied_note = f"筛选：{dict(params)}"
+        if destination == "workspace":
+            return (
+                f"已导出 {row_count} 条账单到工作区：{ws_path}。\n"
+                f"{applied_note}\n"
+                f"可用文件工具读取/处理，或让我把它发给你。"
+            )
+        if destination == "user":
+            return f"已把 {row_count} 条账单的 CSV 文件发给你。\n{applied_note}"
+        return f"已导出 {row_count} 条账单到工作区：{ws_path}，并已把文件发给你。\n{applied_note}"
 
     # ────────────────────────── outbox 轮询 ──────────────────────────
 

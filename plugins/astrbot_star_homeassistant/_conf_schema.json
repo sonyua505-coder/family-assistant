@@ -15,5 +15,11 @@
     "type": "int",
     "default": 15,
     "hint": "范围 5-120"
+  },
+  "disable_legacy_query_tools": {
+    "description": "停用旧查询/统计 LLM 工具（list_bills / get_bill / query_bill_stats / query_bill_changes / list_bill_trash / restore_bill），验证新工具 bill_stats / export_bills",
+    "type": "bool",
+    "default": false,
+    "hint": "验证新工具期间设 true，验证完可改回 false 恢复旧工具"
   }
 }

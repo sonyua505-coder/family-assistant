@@ -457,6 +457,7 @@ class HomeAssistantStar(Star):
         category: str = None,
         note: str = None,
         participants: list = None,
+        occurred_at: str = None,
     ) -> str:
         """修改一笔已记录的账单（只需传要改的字段，其他不变）。
 
@@ -467,6 +468,7 @@ class HomeAssistantStar(Star):
             category(string): 分类（可选）。
             note(string): 备注（可选）。
             participants(array): AA 参与者名单（可选）。
+            occurred_at(string): 发生日期，YYYY-MM-DD 或 YYYY-MM-DD HH:MM:SS（可选，修正导入的日期错误）。
         """
         body = {}
         if type:
@@ -479,6 +481,8 @@ class HomeAssistantStar(Star):
             body["note"] = note
         if participants:
             body["participants"] = self._normalize_participants(participants)
+        if occurred_at:
+            body["occurred_at"] = occurred_at
         data = await self._api(
             "PATCH", f"api/v1/bills/{bill_id}",
             identity=self._identity(event), json_body=body,
@@ -1363,7 +1367,7 @@ class HomeAssistantStar(Star):
             for b in shown:
                 kind = "收入" if b.get("type") == "income" else "支出"
                 lines.append(
-                    f"- {str(b.get('occurred_at', ''))[:10]} {kind} "
+                    f"- #{b.get('id', '?')} {str(b.get('occurred_at', ''))[:10]} {kind} "
                     f"{b.get('category', '')} {b.get('amount', '')}分 "
                     f"{b.get('note', '') or ''}"
                 )

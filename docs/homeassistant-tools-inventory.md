@@ -81,7 +81,7 @@
 ### 记账域
 - `add_bill(type: str, amount: float, category?: str, note?: str, participants?: list, account_id?: int)` — type ∈ {income, expense}
 - `add_bills(bills: list, account_id?: int)` — bills 元素 {type, amount, category?, note?, occurred_at?, participants?}
-- `update_bill(bill_id: int, type?: str, amount?: float, category?: str, note?: str, participants?: list)`
+- `update_bill(bill_id: int, type?: str, amount?: float, category?: str, note?: str, participants?: list, occurred_at?: str)` — occurred_at 格式 YYYY-MM-DD 或 YYYY-MM-DD HH:MM:SS（2026-08-17 补，修正导入的日期错误）
 - `delete_bill(bill_id: int)` — 软删；回复指引可 `list_bill_trash`/`restore_bill` 反悔
 - `list_bill_trash(account_id?: int)` — 回收站列表
 - `restore_bill(bill_id: int)` — 从回收站恢复
@@ -91,7 +91,7 @@
 - `query_bill_stats(year?: int, month?: int, account_id?: int)` — 旧工具，指向旧 `GET /bills/stats`；新统计用 `bill_stats`
 - `query_bill_changes(date?: str)` — date 格式 YYYY-MM-DD
 - `bill_stats(year?: int, month?: int, from_date?: str, to_date?: str, category?: str, amount_min?: int, amount_max?: int, account_id?: int, chart?: bool=True)` — 区间统计（`from_date/to_date` 优先于 `year/month`；金额单位「分」；`chart=True` 时 matplotlib 渲染「支出构成+收支趋势」PNG 并发送，金额展示为「元」）；后端 `GET /api/v1/bills/stats/range`
-- `export_bills(type?: str, category?: str, status?: str, participant?: str, month?: str, year?: int, from_date?: str, to_date?: str, amount_min?: int, amount_max?: int, account_id?: int, destination?: str="text", relative_path?: str, limit?: int=20)` — destination ∈ {text, workspace, user, both}；text 走 json 明细（limit 上限 50），文件导出走 csv（workspace 存当前会话工作区按 `relative_path` 或自动命名，user 直接发 CSV 文件，both 两者）；后端 `GET /api/v1/bills/export`
+- `export_bills(type?: str, category?: str, status?: str, participant?: str, month?: str, year?: int, from_date?: str, to_date?: str, amount_min?: int, amount_max?: int, account_id?: int, destination?: str="text", relative_path?: str, limit?: int=20)` — destination ∈ {text, workspace, user, both}；text 走 json 明细（**每行带 `#id`**，供 update_bill/delete_bill 定位；limit 上限 50），文件导出走 csv（workspace 存当前会话工作区按 `relative_path` 或自动命名，user 直接发 CSV 文件，both 两者）；后端 `GET /api/v1/bills/export`
 
 ### 文件导入域（方向 B，2026-08-16 云端上线）
 - `save_uploaded_file(relative_path?: str)` — 把用户发送的文件（只处理第一个附件）保存到当前会话工作区；相对路径缺省用原文件名；成功后删 temp 副本

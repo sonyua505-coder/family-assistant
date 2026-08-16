@@ -32,9 +32,11 @@ import {
   getBillAny,
   listBills,
   listTrash,
+  parseParticipants,
   restoreBill,
   settleBill,
   softDeleteBill,
+  updateBill,
   yuan,
 } from '../bills/bills.js';
 import { listTokens, mintToken, revokeToken, verifyToken } from './tokens.js';
@@ -452,6 +454,79 @@ export async function registerBillsWebRoutes(app: FastifyInstance, deps: BillsWe
     const after = restoreBill(db, bill.id)!;
     logOperation(db, { personId, accountId: bill.account_id, action: 'bill.restore', entity: 'bills', entityId: bill.id, after });
     return redirect(reply, `/w/${token}/trash?account_id=${bill.account_id}`);
+  });
+
+  // 编辑页（写令牌；渲染当前值预填的表单）
+  app.get('/w/:token/bills/:id/edit', { preHandler: [webAuth, requireWrite] }, async (req, reply) => {
+    const { personId } = req.web!;
+    const token = (req.params as { token: string }).token;
+    const { id } = req.params as { id: string };
+    const q = req.query as Record<string, string | undefined>;
+    const bill = requireBill(personId, id);
+    resolveAccountId(db, personId, bill.account_id);
+
+    const accounts = listAccountsForPerson(db, personId).map((a) => ({ id: a.id, name: a.name }));
+    const html = renderPage('编辑账单', token, req.web!.mode, tpl.edit, {
+      accounts,
+      accountId: bill.account_id,
+      categories: [...BILL_CATEGORIES],
+      bill: {
+        id: bill.id,
+        type: bill.type,
+        amountYuan: (bill.amount / 100).toFixed(bill.amount % 100 ? 2 : 0),
+        category: bill.category,
+        note: bill.note,
+        occurred_at: bill.occurred_at.slice(0, 10),
+        participantsText: parseParticipants(bill.participants)
+          .map((p) => p.name)
+          .join('、'),
+      },
+      error: q.error ?? '',
+    });
+    return reply.type('text/html; charset=utf-8').send(html);
+  });
+
+  // 编辑提交（表单：type/amount(元)/category/note/participants(逗号分隔)/occurred_at）
+  app.post('/w/:token/bills/:id/update', { preHandler: [webAuth, requireWrite] }, async (req, reply) => {
+    const { personId } = req.web!;
+    const token = (req.params as { token: string }).token;
+    const { id } = req.params as { id: string };
+    const bill = requireBill(personId, id);
+    const body = (req.body ?? {}) as Record<string, unknown>;
+    const fail = (msg: string) => redirect(reply, `/w/${token}/bills/${bill.id}/edit?error=${encodeURIComponent(msg)}`);
+
+    const amountYuan = Number(body.amount);
+    const amount = Math.round(amountYuan * 100);
+    if (!Number.isFinite(amount) || amount <= 0) return fail('金额非法');
+
+    try {
+      const participants = String(body.participants ?? '')
+        .split(/[,，、\s]+/)
+        .map((s) => s.trim())
+        .filter(Boolean)
+        .map((name) => ({ name }));
+      const result = updateBill(db, bill.id, {
+        type: body.type === 'income' ? 'income' : 'expense',
+        amount,
+        category: typeof body.category === 'string' ? body.category : undefined,
+        note: typeof body.note === 'string' ? body.note : undefined,
+        occurred_at: typeof body.occurred_at === 'string' && body.occurred_at ? body.occurred_at : undefined,
+        participants,
+      });
+      if (!result) throw new AppError(404, 'BILL_NOT_FOUND', '账单不存在或已删除');
+      logOperation(db, {
+        personId,
+        accountId: bill.account_id,
+        action: 'bill.update',
+        entity: 'bills',
+        entityId: bill.id,
+        before: result.before,
+        after: result.after,
+      });
+      return redirect(reply, `/w/${token}/bills?account_id=${bill.account_id}`);
+    } catch (err) {
+      return fail((err as Error).message);
+    }
   });
 
   // ── 私有辅助 ──

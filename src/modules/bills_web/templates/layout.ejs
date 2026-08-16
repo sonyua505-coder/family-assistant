@@ -6,94 +6,112 @@
 <title><%= title %></title>
 <style>
 :root{
-  --bg:#f4f6fb; --card:#fff; --border:#e4e8f0; --text:#1c2333; --muted:#6b7280;
-  --primary:#2563eb; --primary-soft:#eaf1fe; --green:#1a7f37; --green-soft:#e6f4ea;
-  --red:#c62828; --red-soft:#fdecea; --amber:#8a6d00; --amber-soft:#fff3cd;
-  --radius:12px; --radius-sm:8px; --shadow:0 1px 3px rgba(16,24,40,.06),0 1px 2px rgba(16,24,40,.04);
-  --shadow-hover:0 4px 12px rgba(16,24,40,.08);
+  --bg-top:#eef2fb; --bg-bottom:#f6f7fb; --card:#fff; --border:#e6eaf3; --text:#1c2333; --muted:#69748a;
+  --primary:#2563eb; --primary-dark:#1d4fd8; --primary-soft:#eaf1fe;
+  --green:#16a34a; --green-soft:#e8f7ee; --red:#dc2626; --red-soft:#fdecec;
+  --amber:#b45309; --amber-soft:#fdf3e3; --blue:#1d4ed8; --blue-soft:#e8effd;
+  --radius:14px; --radius-sm:9px;
+  --shadow:0 1px 2px rgba(16,24,40,.05),0 4px 16px -4px rgba(16,24,40,.08);
+  --shadow-hover:0 6px 24px -6px rgba(16,24,40,.14);
+  /* 分类色 */
+  --cat-餐饮:#f59e0b; --cat-交通:#3b82f6; --cat-购物:#a855f7; --cat-居住:#14b8a6;
+  --cat-娱乐:#ec4899; --cat-医疗:#22c55e; --cat-教育:#eab308; --cat-人情:#ef4444; --cat-其他:#94a3b8;
 }
 *{box-sizing:border-box}
-body{font-family:system-ui,-apple-system,"Segoe UI","PingFang SC","Microsoft YaHei",sans-serif;margin:0;background:var(--bg);color:var(--text);line-height:1.55}
-nav{position:sticky;top:0;z-index:10;background:rgba(255,255,255,.92);backdrop-filter:blur(8px);padding:10px 18px;border-bottom:1px solid var(--border);display:flex;gap:4px;flex-wrap:wrap;align-items:center}
-nav .brand{font-weight:700;font-size:15px;color:var(--text);margin-right:8px}
-nav a{color:var(--primary);text-decoration:none;font-size:14px;padding:6px 12px;border-radius:var(--radius-sm);transition:background .15s}
-nav a:hover{background:var(--primary-soft)}
-nav .mode{color:var(--muted);font-size:12px;margin-left:auto;padding:4px 10px;border-radius:20px;background:var(--primary-soft);color:var(--primary);font-weight:600}
-main{max-width:920px;margin:0 auto;padding:20px 16px 48px}
-h1{font-size:20px;margin:4px 0 16px;font-weight:700}
-.card{background:var(--card);border:1px solid var(--border);border-radius:var(--radius);padding:18px;margin-bottom:14px;box-shadow:var(--shadow);transition:box-shadow .15s}
-.card:hover{box-shadow:var(--shadow-hover)}
-.card h2{margin:0 0 12px;font-size:16px;font-weight:600;display:flex;align-items:center;gap:8px;flex-wrap:wrap}
+body{font-family:system-ui,-apple-system,"Segoe UI","PingFang SC","Microsoft YaHei",sans-serif;margin:0;color:var(--text);line-height:1.55;background:linear-gradient(180deg,var(--bg-top),var(--bg-bottom)) fixed;min-height:100vh}
+nav{position:sticky;top:0;z-index:10;background:rgba(255,255,255,.9);backdrop-filter:blur(10px);border-bottom:1px solid var(--border);box-shadow:0 1px 3px rgba(16,24,40,.05);display:flex;gap:2px;flex-wrap:wrap;align-items:center;padding:8px 16px}
+nav .brand{font-weight:800;font-size:16px;color:var(--text);margin-right:10px;letter-spacing:.3px}
+nav a{color:#475569;text-decoration:none;font-size:14px;padding:7px 13px;border-radius:10px;transition:all .15s;font-weight:500}
+nav a:hover{background:var(--primary-soft);color:var(--primary)}
+nav .mode{margin-left:auto;font-size:12px;font-weight:700;padding:4px 12px;border-radius:20px;background:var(--blue-soft);color:var(--blue)}
+main{max-width:940px;margin:0 auto;padding:22px 16px 52px}
+h1{font-size:21px;margin:2px 0 16px;font-weight:800}
+.card{position:relative;background:var(--card);border:1px solid var(--border);border-radius:var(--radius);padding:18px 18px 16px;margin-bottom:16px;box-shadow:var(--shadow);transition:box-shadow .18s,transform .18s;overflow:hidden}
+.card:hover{box-shadow:var(--shadow-hover);transform:translateY(-1px)}
+.card::before{content:"";position:absolute;top:0;left:0;right:0;height:3px;background:linear-gradient(90deg,var(--primary),#60a5fa)}
+.card.income::before{background:linear-gradient(90deg,var(--green),#4ade80)}
+.card.expense::before{background:linear-gradient(90deg,var(--red),#f87171)}
+.card h2{margin:0 0 14px;font-size:16px;font-weight:700;display:flex;align-items:center;gap:8px;flex-wrap:wrap}
 /* 概览统计条 */
-.stat-row{display:flex;gap:16px;flex-wrap:wrap;margin-bottom:12px}
-.stat{flex:1;min-width:120px;background:var(--bg);border-radius:var(--radius-sm);padding:10px 14px}
-.stat .label{font-size:12px;color:var(--muted)}
-.stat .value{font-size:18px;font-weight:700;margin-top:2px}
-.up{color:var(--red)} .down{color:var(--green)} /* 支出升高=红，降低=绿 */
+.stat-row{display:grid;grid-template-columns:repeat(auto-fit,minmax(150px,1fr));gap:12px;margin-bottom:6px}
+.stat{position:relative;background:var(--card);border:1px solid var(--border);border-radius:var(--radius-sm);padding:12px 14px 12px 20px;box-shadow:var(--shadow);overflow:hidden}
+.stat::before{content:"";position:absolute;left:0;top:0;bottom:0;width:4px}
+.stat.income::before{background:var(--green)} .stat.expense::before{background:var(--red)} .stat.balance::before{background:var(--blue)} .stat.mom::before{background:var(--primary)}
+.stat .label{font-size:12px;color:var(--muted);display:flex;align-items:center;gap:5px}
+.stat .value{font-size:20px;font-weight:800;margin-top:3px;font-variant-numeric:tabular-nums}
+.up{color:var(--red)} .down{color:var(--green)}
 table{width:100%;border-collapse:collapse;font-size:14px}
 .table-wrap{overflow-x:auto;-webkit-overflow-scrolling:touch}
-th,td{padding:9px 10px;border-bottom:1px solid #eef1f6;text-align:left;vertical-align:middle}
-th{color:var(--muted);font-weight:600;font-size:13px;white-space:nowrap;background:var(--bg)}
+th,td{padding:10px 12px;border-bottom:1px solid #eef1f7;text-align:left;vertical-align:middle}
+th{color:var(--muted);font-weight:600;font-size:13px;white-space:nowrap;background:#fafbfe;border-bottom:2px solid var(--border)}
 tbody tr:nth-child(even){background:#fafbfe}
 tbody tr:hover{background:var(--primary-soft)}
 td.num,th.num{text-align:right;font-variant-numeric:tabular-nums;white-space:nowrap}
-.badge{display:inline-block;padding:2px 9px;border-radius:20px;font-size:12px;font-weight:600}
+.badge{display:inline-block;padding:2px 10px;border-radius:20px;font-size:12px;font-weight:700}
 .badge.pending{background:var(--amber-soft);color:var(--amber)}
 .badge.settled{background:var(--green-soft);color:var(--green)}
 .amount{font-variant-numeric:tabular-nums;font-weight:700}
 .income{color:var(--green)} .expense{color:var(--red)}
+/* 分类彩点 + 文字 */
+.cat{display:inline-flex;align-items:center;gap:6px;white-space:nowrap}
+.cat::before{content:"";width:9px;height:9px;border-radius:50%;flex:none}
+.cat-餐饮::before{background:var(--cat-餐饮)} .cat-交通::before{background:var(--cat-交通)} .cat-购物::before{background:var(--cat-购物)}
+.cat-居住::before{background:var(--cat-居住)} .cat-娱乐::before{background:var(--cat-娱乐)} .cat-医疗::before{background:var(--cat-医疗)}
+.cat-教育::before{background:var(--cat-教育)} .cat-人情::before{background:var(--cat-人情)} .cat-其他::before{background:var(--cat-其他)}
 /* 占比/走势条 */
 .bar-row{display:flex;align-items:center;gap:8px}
-.bar{background:linear-gradient(90deg,var(--primary),#60a5fa);height:10px;border-radius:6px;min-width:3px;flex:0 0 auto}
-.bar-track{flex:1;background:#eef1f6;border-radius:6px;height:10px;overflow:hidden}
-.bar-track .bar{height:100%;min-width:0}
+.bar-track{flex:1;background:#eef1f7;border-radius:6px;height:10px;overflow:hidden}
+.bar-track .bar{height:100%;min-width:0;border-radius:6px;background:linear-gradient(90deg,var(--primary),#60a5fa)}
 .bar-pct{font-size:12px;color:var(--muted);min-width:44px;text-align:right;font-variant-numeric:tabular-nums}
-/* 迷你柱状图（趋势） */
-.spark{display:flex;align-items:flex-end;gap:3px;height:36px}
-.spark .col{flex:1;border-radius:3px 3px 0 0;min-width:4px;background:var(--primary)}
-.spark .col.inc{background:var(--green)}
-.spark .col.exp{background:var(--red)}
+/* 分类色渐变条（统计页用） */
+.bar-track .bar.cat-bar{background:linear-gradient(90deg,currentColor,#d9e2ff)}
+.cat-bar{color:var(--cat-餐饮)}
+.cat-bar.cat-餐饮{color:var(--cat-餐饮)} .cat-bar.cat-交通{color:var(--cat-交通)} .cat-bar.cat-购物{color:var(--cat-购物)}
+.cat-bar.cat-居住{color:var(--cat-居住)} .cat-bar.cat-娱乐{color:var(--cat-娱乐)} .cat-bar.cat-医疗{color:var(--cat-医疗)}
+.cat-bar.cat-教育{color:var(--cat-教育)} .cat-bar.cat-人情{color:var(--cat-人情)} .cat-bar.cat-其他{color:var(--cat-其他)}
 .toolbar{display:flex;gap:8px;align-items:center;flex-wrap:wrap;margin-bottom:14px}
-input,select,button{padding:7px 11px;border:1px solid #cfd6e4;border-radius:var(--radius-sm);font-size:14px;font-family:inherit;background:#fff;color:var(--text)}
+input,select,button{padding:8px 12px;border:1px solid #cfd6e4;border-radius:var(--radius-sm);font-size:14px;font-family:inherit;background:#fff;color:var(--text)}
 input:focus,select:focus{outline:none;border-color:var(--primary);box-shadow:0 0 0 3px var(--primary-soft)}
-button{background:var(--primary);color:#fff;border:none;cursor:pointer;font-weight:600;transition:background .15s}
-button:hover{background:#1d4fd8}
-button.danger{background:var(--red)}
-button.danger:hover{background:#a01f1f}
-button.ghost{background:#fff;color:var(--primary);border:1px solid var(--primary)}
-button.ghost:hover{background:var(--primary-soft)}
+button{background:linear-gradient(180deg,var(--primary),var(--primary-dark));color:#fff;border:none;cursor:pointer;font-weight:600;transition:all .15s}
+button:hover{box-shadow:0 3px 10px -2px rgba(37,99,235,.4);filter:brightness(1.04)}
+button.danger{background:linear-gradient(180deg,#ef4444,#dc2626)}
+button.danger:hover{box-shadow:0 3px 10px -2px rgba(220,38,38,.4)}
+button.ghost{background:#fff;color:var(--primary);border:1px solid var(--primary);font-weight:600}
+button.ghost:hover{background:var(--primary-soft);box-shadow:none}
+button.icon-btn{padding:8px 10px;line-height:1}
 form.inline{display:inline;margin-right:4px}
 .muted{color:var(--muted);font-size:13px}
-.empty{padding:40px;text-align:center;color:var(--muted)}
-.pager{margin-top:14px;font-size:14px;display:flex;gap:12px;align-items:center;flex-wrap:wrap}
-.pager a{color:var(--primary);text-decoration:none;padding:5px 12px;border:1px solid var(--border);border-radius:var(--radius-sm)}
+.empty{padding:44px;text-align:center;color:var(--muted);font-size:15px}
+.pager{margin-top:14px;font-size:14px;display:flex;gap:10px;align-items:center;flex-wrap:wrap}
+.pager a{color:var(--primary);text-decoration:none;padding:6px 13px;border:1px solid var(--border);border-radius:var(--radius-sm);font-weight:500}
 .pager a:hover{background:var(--primary-soft);border-color:var(--primary)}
-.error{background:var(--red-soft);color:var(--red);border:1px solid #f5c6cb;border-radius:var(--radius-sm);padding:10px 14px;margin-bottom:12px}
+.error{background:var(--red-soft);color:var(--red);border:1px solid #f5c6cb;border-radius:var(--radius-sm);padding:10px 14px;margin-bottom:14px;font-weight:500}
 /* 移动端 */
 @media (max-width:640px){
-  nav{padding:8px 12px;gap:2px}
-  nav .brand{width:100%}
+  nav{padding:8px 10px;gap:2px}
+  nav .brand{width:100%;margin-bottom:2px}
   main{padding:14px 10px 40px}
-  h1{font-size:18px}
+  h1{font-size:19px}
   .card{padding:14px}
+  .stat-row{grid-template-columns:repeat(2,1fr);gap:8px}
+  .stat{padding:10px 10px 10px 16px}
+  .stat .value{font-size:17px}
   .toolbar{gap:6px}
   .toolbar input,.toolbar select,.toolbar button{flex:1 1 auto;min-width:0}
   button{white-space:nowrap}
-  .stat{min-width:100px;padding:8px 10px}
-  .stat .value{font-size:16px}
 }
 </style>
 </head>
 <body>
 <nav>
-  <span class="brand">家庭账本</span>
-  <a href="/w/<%= token %>">总览</a>
-  <a href="/w/<%= token %>/bills">账单</a>
-  <a href="/w/<%= token %>/stats">统计</a>
-  <a href="/w/<%= token %>/aa">待收</a>
-  <a href="/w/<%= token %>/trash">回收站</a>
-  <a href="/w/<%= token %>/export">导出CSV</a>
-  <span class="mode"><%= mode === 'write' ? '可写' : '只读' %></span>
+  <span class="brand">🏠 家庭账本</span>
+  <a href="/w/<%= token %>">📊 总览</a>
+  <a href="/w/<%= token %>/bills">🧾 账单</a>
+  <a href="/w/<%= token %>/stats">📈 统计</a>
+  <a href="/w/<%= token %>/aa">💰 待收</a>
+  <a href="/w/<%= token %>/trash">🗑️ 回收站</a>
+  <a href="/w/<%= token %>/export">⬇️ 导出</a>
+  <span class="mode"><%= mode === 'write' ? '✏️ 可写' : '👁️ 只读' %></span>
 </nav>
 <main><%- body %></main>
 </body>

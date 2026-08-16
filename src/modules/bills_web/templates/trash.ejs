@@ -24,12 +24,12 @@
   <td style="white-space:nowrap"><%= b.deleted_at %></td>
   <td style="white-space:nowrap"><%= b.occurred_at %></td>
   <td><%= b.note %></td>
-  <td><%= b.category %></td>
+  <td><span class="cat cat-<%= b.category %>"><%= b.category %></span></td>
   <td class="num amount <%= b.type === 'income' ? 'income' : 'expense' %>"><%= b.type === 'income' ? '+' : '-' %><%= b.amountYuan %></td>
   <% if (mode === 'write') { %>
   <td style="white-space:nowrap">
     <form class="inline" method="post" action="/w/<%= token %>/bills/<%= b.id %>/restore">
-      <button>恢复</button>
+      <button>♻️ 恢复</button>
     </form>
   </td>
   <% } %>

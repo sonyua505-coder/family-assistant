@@ -290,11 +290,48 @@ try {
   const fhtml = await f.text();
   assert(f.status === 200 && fhtml.includes('共'), `筛选后账单页 200（实得 ${f.status}）`);
 
-  // 5.3 只读令牌不显示写表单
+  // 5.3 只读令牌不显示写表单/编辑
   const roTok = await post('/api/v1/web/tokens', 'openid-xiaoming', { mode: 'read' });
   const ro = await fetch(`${api}/w/${roTok.json.token}/bills`, { headers: H('openid-xiaoming') });
   const roHtml = await ro.text();
   assert(roHtml.includes('只读') && !roHtml.includes('记一笔'), '只读令牌隐藏写表单');
+
+  // ── 账单编辑功能 ──
+
+  // 5.4 编辑页 200 + 预填当前值（取一笔已知账单：8800 购物，note='=SUM()注入'）
+  const target = (await get('/api/v1/bills/export?note==SUM()注入', 'openid-xiaoming')).json.items[0];
+  assert(target && target.id, `找到待编辑账单 id=${target?.id}`);
+  const ed = await fetch(`${api}/w/${wtoken}/bills/${target.id}/edit`, { headers: H('openid-xiaoming') });
+  const edHtml = await ed.text();
+  assert(ed.status === 200, `编辑页返回 200（实得 ${ed.status}）`);
+  assert(/name="amount"[^>]*value="[0-9.]+"/.test(edHtml), '编辑页预填金额（元）');
+  assert(edHtml.includes('selected') && edHtml.includes('购物'), '编辑页预填分类');
+  assert(edHtml.includes('保存修改'), '编辑页含保存按钮');
+
+  // 5.5 提交更新生效（改金额为 99 元 → 9900 分，改备注）
+  const upd = await fetch(`${api}/w/${wtoken}/bills/${target.id}/update`, {
+    method: 'POST',
+    headers: { ...H('openid-xiaoming'), 'content-type': 'application/x-www-form-urlencoded' },
+    body: new URLSearchParams({
+      type: 'expense',
+      amount: '99',
+      category: '交通',
+      note: '编辑后备注',
+      occurred_at: '2026-04-21',
+    }).toString(),
+    redirect: 'manual',
+  });
+  assert(upd.status === 303, `编辑提交返回 303 跳回列表（redirect 固定 303，实得 ${upd.status}）`);
+  const check = await get(`/api/v1/bills/${target.id}`, 'openid-xiaoming');
+  assert(check.json && check.json.amount === 9900 && check.json.note === '编辑后备注', `更新生效（amount=${check.json?.amount} note=${check.json?.note}）`);
+  assert(check.json && check.json.category === '交通', `更新分类生效（${check.json?.category}）`);
+
+  // 5.6 只读令牌访问编辑页被拒（403），越权编辑他人账单被拒（403）
+  const roEd = await fetch(`${api}/w/${roTok.json.token}/bills/${target.id}/edit`, { headers: H('openid-xiaoming') });
+  assert(roEd.status === 403, `只读令牌访问编辑页 → 403（实得 ${roEd.status}）`);
+  const otherBill = (await get('/api/v1/bills/export', 'openid-xiaohong')).json.items[0];
+  const xEd = await fetch(`${api}/w/${wtoken}/bills/${otherBill.id}/edit`, { headers: H('openid-xiaoming') });
+  assert(xEd.status === 403, `越权编辑他人账单 → 403（实得 ${xEd.status}）`);
 } finally {
   child.kill();
   await new Promise((r) => setTimeout(r, 300));

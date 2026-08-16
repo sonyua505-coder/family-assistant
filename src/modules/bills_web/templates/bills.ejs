@@ -67,20 +67,21 @@
 <% items.forEach(function(b){ %>
 <tr>
   <td style="white-space:nowrap"><%= b.occurred_at %></td>
-  <td><%= b.category %></td>
+  <td><span class="cat cat-<%= b.category %>"><%= b.category %></span></td>
   <td><%= b.note %></td>
   <td class="num amount <%= b.type === 'income' ? 'income' : 'expense' %>"><%= b.type === 'income' ? '+' : '-' %><%= b.amountYuan %></td>
-  <td><span class="badge <%= b.status %>"><%= b.status === 'pending' ? '待结算' : '已结清' %></span></td>
+  <td><span class="badge <%= b.status %>"><%= b.status === 'pending' ? '🕐 待结算' : '✅ 已结清' %></span></td>
   <td class="muted"><%= b.participantsText %></td>
   <% if (mode === 'write') { %>
   <td style="white-space:nowrap">
+    <a href="/w/<%= token %>/bills/<%= b.id %>/edit"><button class="ghost" title="编辑账单">✏️</button></a>
     <form class="inline" method="post" action="/w/<%= token %>/bills/<%= b.id %>/delete">
-      <button class="danger" title="软删除，可回收站恢复">删</button>
+      <button class="danger" title="软删除，可回收站恢复">🗑️</button>
     </form>
     <% if (b.status === 'pending') { %>
       <form class="inline" method="post" action="/w/<%= token %>/bills/<%= b.id %>/settle">
         <input type="hidden" name="all" value="1">
-        <button title="全部参与人已付">全部结算</button>
+        <button title="全部参与人已付">✅ 结清</button>
       </form>
     <% } %>
   </td>

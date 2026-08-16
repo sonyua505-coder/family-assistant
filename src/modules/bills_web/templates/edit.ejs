@@ -1,0 +1,28 @@
+<h1>✏️ 编辑账单</h1>
+
+<% if (error) { %><div class="error"><%= error %></div><% } %>
+
+<div class="card">
+  <form method="post" action="/w/<%= token %>/bills/<%= bill.id %>/update">
+    <div class="toolbar">
+      <select name="type">
+        <option value="expense" <%= bill.type === 'expense' ? 'selected' : '' %>>支出</option>
+        <option value="income" <%= bill.type === 'income' ? 'selected' : '' %>>收入</option>
+      </select>
+      <input type="number" name="amount" step="0.01" min="0.01" value="<%= bill.amountYuan %>" placeholder="金额（元）" required>
+      <select name="category">
+        <% categories.forEach(function(c){ %>
+          <option value="<%= c %>" <%= c === bill.category ? 'selected' : '' %>><%= c %></option>
+        <% }) %>
+      </select>
+      <input type="text" name="note" value="<%= bill.note %>" placeholder="备注">
+      <input type="date" name="occurred_at" value="<%= bill.occurred_at %>">
+    </div>
+    <div class="toolbar">
+      <input type="text" name="participants" value="<%= bill.participantsText %>" placeholder="AA参与人，逗号分隔（可选）" style="flex:1">
+      <button>保存修改</button>
+      <a href="/w/<%= token %>/bills?account_id=<%= accountId %>"><button class="ghost" type="button">返回</button></a>
+    </div>
+  </form>
+  <div class="muted" style="margin-top:8px">账单 #<%= bill.id %> · 修改后 AA 参与人会重新计算结算状态。</div>
+</div>

@@ -23,6 +23,7 @@ export const tpl = {
   stats: load('stats.ejs'),
   aa: load('aa.ejs'),
   trash: load('trash.ejs'),
+  edit: load('edit.ejs'),
 };
 
 /** 渲染完整页面：子模板 → body（已转义），再套 layout。 */

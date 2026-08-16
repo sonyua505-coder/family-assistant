@@ -25,8 +25,8 @@
     <td style="white-space:nowrap"><%= p.occurred_at %></td>
     <td><%= p.note %></td>
     <td class="num amount expense"><%= p.amountYuan %></td>
-    <td><%= p.payer %></td>
-    <td><span class="badge pending"><%= u %></span></td>
+    <td>👤 <%= p.payer %></td>
+    <td><span class="badge pending">🕐 <%= u %></span></td>
     <% if (mode === 'write') { %>
     <td style="white-space:nowrap">
       <form class="inline" method="post" action="/w/<%= token %>/bills/<%= p.id %>/settle">

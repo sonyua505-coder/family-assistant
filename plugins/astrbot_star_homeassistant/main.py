@@ -1292,10 +1292,11 @@ class HomeAssistantStar(Star):
         amount_min: int = None,
         amount_max: int = None,
         account_id: int = None,
-        destination: str = "workspace",
+        destination: str = "text",
         relative_path: str = None,
+        limit: int = 20,
     ) -> str:
-        """把账单导出为 CSV 文件。默认存到当前会话工作区（供 BOT 进一步处理后再发送），也可直接发文件给你或两者都做。
+        """查询账单明细（默认）或导出为 CSV 文件。纯查询模式返回明细文本供你直接回答，结果过长时只显示前 limit 条并提示导出；destination 可选 workspace（存当前会话工作区）/ user（直接发 CSV 文件）/ both。
 
         Args:
             type(string): income 或 expense（可选）。
@@ -1309,32 +1310,72 @@ class HomeAssistantStar(Star):
             amount_min(number): 金额下限（单位：分，1 元 = 100 分）（可选）。
             amount_max(number): 金额上限（单位：分，1 元 = 100 分）（可选）。
             account_id(number): 记账账户 id（有多个账本时必须指定）。
-            destination(string): workspace=只存会话工作区；user=直接把 CSV 文件发给你；both=既存工作区又发文件。默认 workspace。
-            relative_path(string): 工作区内的相对路径，如 exports/家庭账单.csv（可选，默认自动命名）。
+            destination(string): text=纯查询返回明细文本（默认）；workspace=只存会话工作区；user=直接把 CSV 文件发给你；both=既存工作区又发文件。
+            relative_path(string): destination 为 workspace/both 时，工作区内的相对路径，如 exports/家庭账单.csv（可选，默认自动命名）。
+            limit(number): 纯查询模式下最多返回的明细条数，默认 20，最大 50（可选）。
         """
-        params = {"format": "csv"}
+        filters = {}
         if type:
-            params["type"] = type
+            filters["type"] = type
         if category:
-            params["category"] = category
+            filters["category"] = category
         if status:
-            params["status"] = status
+            filters["status"] = status
         if participant:
-            params["participant"] = participant
+            filters["participant"] = participant
         if month:
-            params["month"] = month
+            filters["month"] = month
         if year:
-            params["year"] = year
+            filters["year"] = year
         if from_date:
-            params["from"] = from_date
+            filters["from"] = from_date
         if to_date:
-            params["to"] = to_date
+            filters["to"] = to_date
         if amount_min is not None:
-            params["amount_min"] = amount_min
+            filters["amount_min"] = amount_min
         if amount_max is not None:
-            params["amount_max"] = amount_max
+            filters["amount_max"] = amount_max
         if account_id:
-            params["account_id"] = account_id
+            filters["account_id"] = account_id
+
+        # ── 纯查询模式（默认）：返回明细文本给 BOT，不进 LLM 上下文超长风险 ──
+        if destination == "text":
+            qs = urlencode(filters)
+            data = await self._api(
+                "GET", f"api/v1/bills/export?{qs}", identity=self._identity(event)
+            )
+            if not data.get("ok", True):
+                return self._err_msg(data)
+            items = data.get("items") or []
+            total = data.get("total") or len(items)
+            applied = data.get("applied") or {}
+            if not items:
+                return "没有符合条件的账单。" + (f"\n已生效筛选：{applied}" if applied else "")
+            try:
+                cap = max(1, min(int(limit) if limit else 20, 50))
+            except (TypeError, ValueError):
+                cap = 20
+            shown = items[:cap]
+            lines = [f"共 {total} 条账单（显示前 {len(shown)} 条）："]
+            for b in shown:
+                kind = "收入" if b.get("type") == "income" else "支出"
+                lines.append(
+                    f"- {str(b.get('occurred_at', ''))[:10]} {kind} "
+                    f"{b.get('category', '')} {b.get('amount', '')}分 "
+                    f"{b.get('note', '') or ''}"
+                )
+            if total > len(shown):
+                lines.append(
+                    f"\n…还有 {total - len(shown)} 条未显示。"
+                    f"可用 destination=user 把 CSV 文件发给你，或 destination=workspace 存工作区。"
+                )
+            if applied:
+                lines.append(f"已生效筛选：{applied}")
+            return "\n".join(lines)
+
+        # ── 文件导出模式（workspace / user / both）：走 CSV ──
+        params = dict(filters)
+        params["format"] = "csv"
         qs = urlencode(params)
 
         ret = await self._api_raw(

@@ -1448,8 +1448,7 @@ class HomeAssistantStar(Star):
 
     # ────────────────────────── 文件导入（方向 B） ──────────────────────────
 
-    @staticmethod
-    def _parse_bills_file(path: str) -> tuple:
+    def _parse_bills_file(self, path: str) -> tuple:
         """解析账单文件（xlsx/xls/csv）为 CreateBillInput 列表（宽容）。
 
         金额默认「元」→ 换算为「分」；类型/日期/参与人规范化；坏行跳过并记录原因。

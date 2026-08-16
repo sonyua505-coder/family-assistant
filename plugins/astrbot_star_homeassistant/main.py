@@ -27,7 +27,10 @@ import asyncio
 import csv
 import io
 import os
+import re
+import shutil
 import uuid
+from datetime import date as _date
 from datetime import datetime
 from pathlib import Path
 from urllib.parse import urlencode
@@ -36,7 +39,7 @@ import httpx
 
 from astrbot.api import logger
 from astrbot.api.event import AstrMessageEvent, filter
-from astrbot.api.message_components import File
+from astrbot.api.message_components import File, Reply
 from astrbot.api.star import Context, Star
 from astrbot.core.message.message_event_result import MessageChain
 from astrbot.core.utils.astrbot_path import get_astrbot_temp_path, get_astrbot_workspaces_path
@@ -1442,6 +1445,313 @@ class HomeAssistantStar(Star):
         if destination == "user":
             return f"已把 {row_count} 条账单的 CSV 文件发给你。\n{applied_note}"
         return f"已导出 {row_count} 条账单到工作区：{ws_path}，并已把文件发给你。\n{applied_note}"
+
+    # ────────────────────────── 文件导入（方向 B） ──────────────────────────
+
+    @staticmethod
+    def _parse_bills_file(path: str) -> tuple:
+        """解析账单文件（xlsx/xls/csv）为 CreateBillInput 列表（宽容）。
+
+        金额默认「元」→ 换算为「分」；类型/日期/参与人规范化；坏行跳过并记录原因。
+        返回 (bills, skipped_count, reasons)。
+        """
+        bills = []
+        skipped = 0
+        reasons = []
+
+        def norm_type(v):
+            s = str(v).strip().lower() if v is not None else ""
+            return {
+                "收入": "income", "支出": "expense",
+                "income": "income", "expense": "expense",
+                "收": "income", "支": "expense",
+            }.get(s)
+
+        def norm_amount(v):
+            if v is None:
+                return None
+            s = (
+                str(v)
+                .replace(",", "").replace("，", "").replace(" ", "")
+                .replace("¥", "").replace("￥", "").replace("元", "")
+                .strip()
+            )
+            try:
+                num = float(s)
+            except (TypeError, ValueError):
+                return None
+            fen = round(num * 100)  # 文件金额默认「元」→「分」
+            return fen if fen >= 1 else None
+
+        def norm_date(v):
+            if v is None:
+                return None
+            if hasattr(v, "year"):  # openpyxl/xlrd 已解析为日期对象
+                return f"{v.year:04d}-{v.month:02d}-{v.day:02d}"
+            s = str(v).strip().replace("/", "-")
+            m = re.match(r"^(\d{4})-(\d{1,2})-(\d{1,2})", s)
+            if m:
+                return f"{int(m.group(1)):04d}-{int(m.group(2)):02d}-{int(m.group(3)):02d}"
+            m = re.match(r"^(\d{1,2})-(\d{1,2})(?:[^0-9]|$)", s)  # MM-DD 补当年
+            if m:
+                return f"{_date.today().year:04d}-{int(m.group(1)):02d}-{int(m.group(2)):02d}"
+            return None
+
+        def norm_category(v):
+            cats = {"餐饮", "交通", "购物", "居住", "娱乐", "医疗", "教育", "人情", "其他"}
+            s = str(v).strip() if v is not None else ""
+            return s if s in cats else ""
+
+        rows = []
+        low = path.lower()
+        try:
+            if low.endswith(".csv"):
+                text = None
+                for enc in ("utf-8-sig", "gbk", "utf-8"):
+                    try:
+                        with open(path, "r", encoding=enc, newline="") as f:
+                            text = f.read()
+                        break
+                    except (UnicodeDecodeError, UnicodeError):
+                        continue
+                if text is None:
+                    return [], 0, ["无法识别文件编码"]
+                rows = list(csv.reader(io.StringIO(text)))
+            elif low.endswith(".xlsx"):
+                import openpyxl
+
+                wb = openpyxl.load_workbook(path, data_only=True)
+                ws = wb[wb.sheetnames[0]]
+                rows = [[c.value for c in row] for row in ws.iter_rows()]
+            elif low.endswith(".xls"):
+                import xlrd
+
+                book = xlrd.open_workbook(path)
+                sheet = book.sheet_by_index(0)
+                rows = [sheet.row_values(i) for i in range(sheet.nrows)]
+            else:
+                return [], 0, [f"不支持的文件类型：{low.rsplit('.', 1)[-1]}"]
+        except Exception as e:
+            return [], 0, [f"文件读取失败：{e}"]
+
+        # 表头识别（前 10 行找含关键词的表头行 → 列映射；找不到则按约定列序）
+        header_keys = ("日期", "类型", "金额", "分类", "备注", "参与人")
+        header_map = {}
+        data_start = 0
+        for i, row in enumerate(rows[:10]):
+            joined = "".join(str(c) if c is not None else "" for c in row)
+            if any(k in joined for k in header_keys):
+                for idx, cell in enumerate(row):
+                    s = str(cell) if cell is not None else ""
+                    if ("日期" in s) or ("时间" in s):
+                        header_map["date"] = idx
+                    elif "类型" in s:
+                        header_map["type"] = idx
+                    elif ("金额" in s) or ("amount" in s.lower()):
+                        header_map["amount"] = idx
+                    elif "分类" in s:
+                        header_map["category"] = idx
+                    elif ("备注" in s) or ("说明" in s):
+                        header_map["note"] = idx
+                    elif ("参与人" in s) or ("成员" in s):
+                        header_map["participants"] = idx
+                data_start = i + 1
+                break
+
+        for i, row in enumerate(rows[data_start:]):
+            cells = [c if c is not None else "" for c in row]
+            if all(str(c).strip() == "" for c in cells):
+                continue  # 空行
+            lineno = i + data_start + 1
+            if header_map:
+                def getc(k):
+                    idx = header_map.get(k)
+                    return cells[idx] if idx is not None and idx < len(cells) else None
+
+                t = norm_type(getc("type"))
+                amt = norm_amount(getc("amount"))
+                d = norm_date(getc("date"))
+                cat = norm_category(getc("category"))
+                note = str(getc("note") or "").strip()
+                parts = getc("participants")
+            else:  # 约定列序：日期 类型 金额 分类 备注 参与人
+                t = norm_type(cells[1] if len(cells) > 1 else "")
+                amt = norm_amount(cells[2] if len(cells) > 2 else "")
+                d = norm_date(cells[0] if len(cells) > 0 else "")
+                cat = norm_category(cells[3] if len(cells) > 3 else "")
+                note = str(cells[4] if len(cells) > 4 else "").strip()
+                parts = cells[5] if len(cells) > 5 else None
+            if not t:
+                skipped += 1
+                reasons.append(f"第 {lineno} 行：类型无法识别")
+                continue
+            if amt is None:
+                skipped += 1
+                reasons.append(f"第 {lineno} 行：金额无法识别")
+                continue
+            bill = {"type": t, "amount": amt}
+            if d:
+                bill["occurred_at"] = d
+            if cat:
+                bill["category"] = cat
+            if note:
+                bill["note"] = note
+            if parts:
+                plist = self._normalize_participants(
+                    [p.strip() for p in str(parts).replace("、", ",").split(",") if p.strip()]
+                )
+                if plist:
+                    bill["participants"] = plist
+            bills.append(bill)
+        return bills, skipped, reasons
+
+    @filter.llm_tool(name="save_uploaded_file")
+    async def save_uploaded_file(self, event: AstrMessageEvent, relative_path: str = None) -> str:
+        """把用户发送的文件保存到当前会话工作区（只处理第一个文件附件）。保存后可 parse_bills_file 预览或 import_bills 导入记账。
+
+        Args:
+            relative_path(string): 工作区内的相对路径，如 bills/对账单.xlsx（可选，默认用原文件名）。
+        """
+        file_comp = None
+        for comp in event.message_obj.message:
+            if isinstance(comp, File):
+                file_comp = comp
+                break
+            if isinstance(comp, Reply) and getattr(comp, "chain", None):
+                for rc in comp.chain:
+                    if isinstance(rc, File):
+                        file_comp = rc
+                        break
+                if file_comp:
+                    break
+        if not file_comp:
+            return "未检测到文件，请先发送文件附件。"
+        src = await file_comp.get_file()  # 异步获取，勿用 comp.file
+        if not src:
+            return "无法获取文件内容，请重新发送。"
+        try:
+            if relative_path:
+                target = self._resolve_workspace_rel(event, relative_path)
+            else:
+                name = file_comp.name or os.path.basename(src) or "uploaded.bin"
+                target = self._workspace_root(event) / name
+            target.parent.mkdir(parents=True, exist_ok=True)
+            shutil.copy(src, target)
+        except ValueError as e:
+            return f"无效路径：{e}"
+        finally:
+            if src and os.path.exists(src):
+                os.remove(src)  # AstrBot 不自动清理 temp 副本，必须手动删
+        rel = target.relative_to(self._workspace_root(event)).as_posix()
+        size = os.path.getsize(target)
+        return f"已保存文件到工作区：{rel}（{size} 字节）。可 parse_bills_file 预览，或 import_bills 直接导入记账。"
+
+    @filter.llm_tool(name="parse_bills_file")
+    async def parse_bills_file(self, event: AstrMessageEvent, relative_path: str, limit: int = 20) -> str:
+        """解析工作区里的账单文件（xlsx/xls/csv）为结构化账单行，返回明细文本供确认。文件金额默认「元」，已换算为「分」展示。
+
+        Args:
+            relative_path(string): 工作区内的相对路径，如 bills/对账单.xlsx。
+            limit(number): 最多显示的明细条数，默认 20，最大 50（可选）。
+        """
+        try:
+            target = self._resolve_workspace_rel(event, relative_path)
+        except ValueError as e:
+            return f"无效路径：{e}"
+        if not target.exists() or not target.is_file():
+            return f"文件不存在：{relative_path}"
+        bills, skipped, reasons = self._parse_bills_file(str(target))
+        if not bills:
+            tail = "；".join(reasons[:5]) if reasons else "无有效行"
+            return f"未能从文件解析出有效账单（跳过 {skipped} 行）。{tail}"
+        try:
+            cap = max(1, min(int(limit) if limit else 20, 50))
+        except (TypeError, ValueError):
+            cap = 20
+        lines = [f"共 {len(bills)} 条有效账单（显示前 {min(cap, len(bills))} 条）："]
+        for b in bills[:cap]:
+            kind = "收入" if b.get("type") == "income" else "支出"
+            parts_txt = f" 参与人:{','.join(p.get('name', '') for p in b.get('participants', []))}" if b.get("participants") else ""
+            lines.append(
+                f"- {b.get('occurred_at', '')} {kind} {b.get('category', '')} "
+                f"{b.get('amount', 0)}分 {b.get('note', '')}{parts_txt}"
+            )
+        extra = []
+        if len(bills) > cap:
+            extra.append(f"…还有 {len(bills) - cap} 条，可 import_bills 直接导入。")
+        if skipped:
+            extra.append(f"跳过 {skipped} 行坏数据：" + "；".join(reasons[:3]) + "…")
+        if extra:
+            lines.append("\n".join(extra))
+        return "\n".join(lines)
+
+    @filter.llm_tool(name="import_bills")
+    async def import_bills(self, event: AstrMessageEvent, relative_path: str, account_id: int = None) -> str:
+        """解析工作区里的账单文件并批量导入记账（宽容：坏行跳过、合法行入库，返回失败明细）。
+
+        Args:
+            relative_path(string): 工作区内的相对路径，如 bills/对账单.xlsx。
+            account_id(number): 记账账户 id（有多个账本时必须指定）。
+        """
+        try:
+            target = self._resolve_workspace_rel(event, relative_path)
+        except ValueError as e:
+            return f"无效路径：{e}"
+        if not target.exists() or not target.is_file():
+            return f"文件不存在：{relative_path}"
+        bills, skipped, reasons = self._parse_bills_file(str(target))
+        if not bills:
+            tail = "；".join(reasons[:5]) if reasons else "无有效行"
+            return f"文件中没有可导入的账单（跳过 {skipped} 行）。{tail}"
+        if len(bills) > 500:
+            return f"文件含 {len(bills)} 条，超过单次 500 条上限，请拆分后再导入。"
+        body = {"bills": bills}
+        if account_id:
+            body["account_id"] = account_id
+        data = await self._api(
+            "POST", "api/v1/bills/import",
+            identity=self._identity(event), json_body=body,
+        )
+        if not data.get("ok", True):
+            return self._err_msg(data)
+        ok_count = data.get("ok_count", 0)
+        fail_count = data.get("fail_count", 0)
+        total = data.get("total", len(bills))
+        lines = [f"已导入 {ok_count}/{total} 笔账单。"]
+        if fail_count:
+            lines.append(f"失败 {fail_count} 笔：")
+            for f in (data.get("failures") or [])[:10]:
+                lines.append(
+                    f"- 第 {f.get('index', '?')} 行：{f.get('code', '')} {f.get('message', '')}"
+                )
+            if fail_count > 10:
+                lines.append(f"…共 {fail_count} 笔失败")
+        if skipped:
+            lines.append(f"（文件解析跳过 {skipped} 行：" + "；".join(reasons[:3]) + "…）")
+        return "\n".join(lines)
+
+    @filter.llm_tool(name="delete_file")
+    async def delete_file(self, event: AstrMessageEvent, relative_path: str) -> str:
+        """删除当前会话工作区里的一个文件或目录（不可恢复，请谨慎）。
+
+        Args:
+            relative_path(string): 工作区内的相对路径。
+        """
+        try:
+            target = self._resolve_workspace_rel(event, relative_path)
+        except ValueError as e:
+            return f"无效路径：{e}"
+        if not target.exists():
+            return f"文件不存在：{relative_path}"
+        try:
+            if target.is_dir():
+                shutil.rmtree(target)
+            else:
+                os.remove(target)
+        except OSError as e:
+            return f"删除失败：{e}"
+        logger.info(f"[HomeAssistant] 已删除工作区文件: {relative_path}")
+        return f"已删除：{relative_path}"
 
     # ────────────────────────── outbox 轮询 ──────────────────────────
 

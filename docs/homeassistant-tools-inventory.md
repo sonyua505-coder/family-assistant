@@ -1,7 +1,7 @@
 # 家庭信息助理 · AstrBot 插件 LLM 工具清单（实测）
 
 > 来源：云端运行态 `/opt/homeassistant/plugins/astrbot_star_homeassistant/main.py`
-> 整理日期：2026-08-15（2026-08-16 同步到 38 个：新增 bill_stats / export_bills，对接方向 A 新端点）
+> 整理日期：2026-08-15（2026-08-16 同步到 42 个：方向 A 新增 bill_stats / export_bills；方向 B 新增 save_uploaded_file / parse_bills_file / import_bills / delete_file）
 > 用途：本地设计文档的权威对照。**新增工具不得与下表重名/同义**；本地要加新工具时，先在文档里追加条目再开发，避免云端部署时撞名。
 
 ## 0. 插件骨架（非工具，但契约相关）
@@ -15,7 +15,7 @@
 | outbox 主动推送 | 后台轮询 `GET /api/v1/outbox/pending?channel=qq&limit=10` → `context.send_message` → 回执 `POST /api/v1/outbox/{id}/delivery` |
 | 平台 id | 从 UMO 首段推断（qq_official），无命中时按 `{platform}:FriendMessage:{openid}` 构造 C2C 会话 |
 
-## 1. 工具总表（38 个）
+## 1. 工具总表（42 个）
 
 | # | 工具名 | 功能 | 后端端点 |
 |---|--------|------|----------|
@@ -57,6 +57,10 @@
 | 36 | `revoke_ledger_link` | 撤销账本链接 | DELETE `api/v1/web/tokens/{id}` |
 | 37 | `bill_stats` | 收支统计（含图表，chart=true 发统计图） | GET `api/v1/bills/stats/range` |
 | 38 | `export_bills` | 账单明细查询/CSV 导出（text/workspace/user/both） | GET `api/v1/bills/export` |
+| 39 | `save_uploaded_file` | 保存用户发送的文件到会话工作区 | —（无后端，文件落盘工作区） |
+| 40 | `parse_bills_file` | 解析工作区账单文件（xlsx/xls/csv）为结构化明细 | —（读工作区文件） |
+| 41 | `import_bills` | 解析工作区账单文件并批量导入（宽容，坏行跳过） | POST `api/v1/bills/import` |
+| 42 | `delete_file` | 删除工作区文件/目录（不可恢复） | —（无后端） |
 
 ## 2. 各工具 LLM 参数签名
 
@@ -88,6 +92,12 @@
 - `query_bill_changes(date?: str)` — date 格式 YYYY-MM-DD
 - `bill_stats(year?: int, month?: int, from_date?: str, to_date?: str, category?: str, amount_min?: int, amount_max?: int, account_id?: int, chart?: bool=True)` — 区间统计（`from_date/to_date` 优先于 `year/month`；金额单位「分」；`chart=True` 时 matplotlib 渲染「支出构成+收支趋势」PNG 并发送，金额展示为「元」）；后端 `GET /api/v1/bills/stats/range`
 - `export_bills(type?: str, category?: str, status?: str, participant?: str, month?: str, year?: int, from_date?: str, to_date?: str, amount_min?: int, amount_max?: int, account_id?: int, destination?: str="text", relative_path?: str, limit?: int=20)` — destination ∈ {text, workspace, user, both}；text 走 json 明细（limit 上限 50），文件导出走 csv（workspace 存当前会话工作区按 `relative_path` 或自动命名，user 直接发 CSV 文件，both 两者）；后端 `GET /api/v1/bills/export`
+
+### 文件导入域（方向 B，2026-08-16 云端上线）
+- `save_uploaded_file(relative_path?: str)` — 把用户发送的文件（只处理第一个附件）保存到当前会话工作区；相对路径缺省用原文件名；成功后删 temp 副本
+- `parse_bills_file(relative_path: str, limit?: int=20)` — 解析工作区 xlsx/xls/csv 为结构化账单行（文件金额默认「元」→ 显示为「分」；坏行跳过并说明原因）
+- `import_bills(relative_path: str, account_id?: int)` — 解析文件 + POST `/api/v1/bills/import`（宽容：坏行记 `failures` 不阻断，≤500 笔）；返回 ok_count + 失败行 `index/code/message`
+- `delete_file(relative_path: str)` — 删除工作区文件/目录（不可恢复，插件日志记录）
 
 ### 待办域
 - `add_task(content: str, category?: str, remind_at?: str, account_id?: int)` — remind_at 格式 YYYY-MM-DD HH:MM
@@ -128,10 +138,11 @@
 8. **`get_my_identity` 未登记时返回引导语**，引导链：create_person → create_account → add_bill。
 9. **新查询/统计工具（方向 A，2026-08-16 云端上线）**：`export_bills`/`bill_stats` 对接 `/bills/export` 与 `/bills/stats/range`；金额过滤单位「分」；后端回显 `applied`（实际生效筛选），工具回复带「已生效筛选」供 LLM 自验证；`bill_stats` 图表由插件 matplotlib 渲染 PNG 直接发送。
 10. **旧工具可整体停用**：配置 `disable_legacy_query_tools=true` 时停用 list_bills/get_bill/query_bill_stats/query_bill_changes/list_bill_trash/restore_bill（`context.deactivate_llm_tool`，持久化到 shared_preferences）。
+11. **文件导入（方向 B，2026-08-16 云端上线）**：`save_uploaded_file` → `parse_bills_file`（预览确认）→ `import_bills`（宽容入库）→ `delete_file`（清理）。文件金额默认「元」，插件解析时换算为「分」（区别于 LLM 工具参数约定——文件解析是插件职责，不做整批 400，坏行在 `failures` 里反馈 LLM 自修正）。工作区文件路径一律相对路径，插件 `resolve + is_relative_to` 校验防逃逸。
 
 ## 4. 新工具开发约定（写进本地文档）
 
-- 新增工具**先确认不与上表 38 个重名**（含语义相同仅改名的，如已有 `add_bill` 就别再写 `record_bill`/`log_expense`）。
+- 新增工具**先确认不与上表 42 个重名**（含语义相同仅改名的，如已有 `add_bill` 就别再写 `record_bill`/`log_expense`）。
 - 每个工具 = `@filter.llm_tool(name="...")` + async 方法 + **带 Args 的 docstring**（AstrBot 用 docstring 生成 LLM 工具描述，参数名/类型/单位/枚举都要写清楚）。
 - 走 `self._api(method, path, identity=self._identity(event), json_body=...)`，统一错误返回为失败字典。
 - 工具描述里写明行为约定（如 add_bill 的 AA 规则、participants 格式），LLM 靠描述触发正确调用。

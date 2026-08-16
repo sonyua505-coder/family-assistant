@@ -179,9 +179,31 @@ export async function registerBillsWebRoutes(app: FastifyInstance, deps: BillsWe
     const accounts = listAccountsForPerson(db, personId);
     const d = new Date();
     const ym = { year: d.getFullYear(), month: d.getMonth() + 1 };
+    // 上月 ym（跨年处理）
+    const lastYm =
+      ym.month === 1 ? { year: ym.year - 1, month: 12 } : { year: ym.year, month: ym.month - 1 };
     const cards = accounts.map((a) => {
       const s = billStats(db, a.id, ym);
-      return { id: a.id, name: a.name, type: a.type, role: a.role, income: yuan(s.income), expense: yuan(s.expense) };
+      const last = billStats(db, a.id, lastYm);
+      const balance = s.income - s.expense;
+      // 环比上月支出增减（上月支出为 0 → mom=null 显示「—」）
+      const mom =
+        last.expense === 0 ? null : Math.round(((s.expense - last.expense) / last.expense) * 100);
+      const top = (s.by_category || []).slice(0, 3).map((c) => ({ category: c.category, amountYuan: yuan(c.amount) }));
+      return {
+        id: a.id,
+        name: a.name,
+        type: a.type,
+        role: a.role,
+        income: yuan(s.income),
+        expense: yuan(s.expense),
+        balance: yuan(balance),
+        balanceClass: balance >= 0 ? 'income' : 'expense',
+        mom,
+        momText: mom === null ? '—' : `${mom > 0 ? '+' : ''}${mom}%`,
+        momClass: mom === null ? '' : mom > 0 ? 'up' : 'down',
+        topCategories: top,
+      };
     });
     const html = renderPage('账本总览', token, req.web!.mode, tpl.overview, { accounts: cards });
     return reply.type('text/html; charset=utf-8').send(html);
@@ -197,10 +219,18 @@ export async function registerBillsWebRoutes(app: FastifyInstance, deps: BillsWe
 
     const month = q.month && /^\d{4}-\d{2}$/.test(q.month) ? q.month : undefined;
     const page = q.page !== undefined && Number(q.page) > 0 ? Number(q.page) : 1;
+    // 金额筛选：表单填「元」，转「分」给 listBills；非法/空则忽略
+    const amountMinYuan = q.amount_min !== undefined && q.amount_min !== '' ? Number(q.amount_min) : undefined;
+    const amountMaxYuan = q.amount_max !== undefined && q.amount_max !== '' ? Number(q.amount_max) : undefined;
+    const toFen = (v: number | undefined): number | undefined => (Number.isFinite(v) && v! >= 0 ? Math.round(v! * 100) : undefined);
     const { items, total, page_size } = listBills(db, account.id, {
       month,
       category: q.category || undefined,
       type: q.type || undefined,
+      status: q.status === 'pending' || q.status === 'settled' ? q.status : undefined,
+      participant: q.participant || undefined,
+      amount_min: toFen(amountMinYuan),
+      amount_max: toFen(amountMaxYuan),
       page,
       page_size: 50,
     });
@@ -214,15 +244,22 @@ export async function registerBillsWebRoutes(app: FastifyInstance, deps: BillsWe
       amountYuan: yuan(b.amount),
       participantsText: b.participants.map((p) => p.name).join('、'),
     }));
+    const filters = {
+      month: month ?? '',
+      category: q.category ?? '',
+      type: q.type ?? '',
+      status: q.status ?? '',
+      participant: q.participant ?? '',
+      amount_min: q.amount_min ?? '',
+      amount_max: q.amount_max ?? '',
+    };
     const pagerHref = (p: number): string =>
-      `/w/${token}/bills?${accQs(account.id, { month, category: q.category, type: q.type })}&page=${p}`;
+      `/w/${token}/bills?${accQs(account.id, filters)}&page=${p}`;
 
     const html = renderPage('账单', token, req.web!.mode, tpl.bills, {
       accounts: accounts.map((a) => ({ id: a.id, name: a.name })),
       accountId: account.id,
-      month: month ?? '',
-      category: q.category ?? '',
-      type: q.type ?? '',
+      ...filters,
       categories: [...BILL_CATEGORIES],
       items: rows,
       total,

@@ -24,6 +24,14 @@
     <option value="expense" <%= type === 'expense' ? 'selected' : '' %>>支出</option>
     <option value="income" <%= type === 'income' ? 'selected' : '' %>>收入</option>
   </select>
+  <select name="status">
+    <option value="">全部状态</option>
+    <option value="pending" <%= status === 'pending' ? 'selected' : '' %>>待结算</option>
+    <option value="settled" <%= status === 'settled' ? 'selected' : '' %>>已结清</option>
+  </select>
+  <input type="number" name="amount_min" min="0" step="0.01" value="<%= amount_min %>" placeholder="金额≥(元)">
+  <input type="number" name="amount_max" min="0" step="0.01" value="<%= amount_max %>" placeholder="金额≤(元)">
+  <input type="text" name="participant" value="<%= participant %>" placeholder="参与人">
   <button>筛选</button>
 </form>
 
@@ -53,18 +61,19 @@
 <% if (items.length === 0) { %>
   <div class="empty">暂无账单</div>
 <% } else { %>
+<div class="table-wrap">
 <table>
-<tr><th>日期</th><th>分类</th><th>备注</th><th>金额</th><th>状态</th><th>参与人</th><% if (mode === 'write') { %><th>操作</th><% } %></tr>
+<tr><th>日期</th><th>分类</th><th>备注</th><th class="num">金额</th><th>状态</th><th>参与人</th><% if (mode === 'write') { %><th>操作</th><% } %></tr>
 <% items.forEach(function(b){ %>
 <tr>
-  <td><%= b.occurred_at %></td>
+  <td style="white-space:nowrap"><%= b.occurred_at %></td>
   <td><%= b.category %></td>
   <td><%= b.note %></td>
-  <td class="amount <%= b.type === 'income' ? 'income' : 'expense' %>"><%= b.type === 'income' ? '+' : '-' %><%= b.amountYuan %></td>
+  <td class="num amount <%= b.type === 'income' ? 'income' : 'expense' %>"><%= b.type === 'income' ? '+' : '-' %><%= b.amountYuan %></td>
   <td><span class="badge <%= b.status %>"><%= b.status === 'pending' ? '待结算' : '已结清' %></span></td>
   <td class="muted"><%= b.participantsText %></td>
   <% if (mode === 'write') { %>
-  <td>
+  <td style="white-space:nowrap">
     <form class="inline" method="post" action="/w/<%= token %>/bills/<%= b.id %>/delete">
       <button class="danger" title="软删除，可回收站恢复">删</button>
     </form>
@@ -79,6 +88,7 @@
 </tr>
 <% }) %>
 </table>
+</div>
 <div class="pager">
   <% if (page > 1) { %><a href="<%= pagerHref(page - 1) %>">上一页</a><% } %>
   <span>第 <%= page %> 页 / 共 <%= total %> 条</span>

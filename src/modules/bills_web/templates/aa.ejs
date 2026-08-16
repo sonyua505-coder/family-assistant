@@ -16,18 +16,19 @@
 <% if (pending.length === 0) { %>
   <div class="empty">没有待收款项，全部结清。</div>
 <% } else { %>
+<div class="table-wrap">
 <table>
-<tr><th>日期</th><th>备注</th><th>金额</th><th>垫付人</th><th>待收</th><% if (mode === 'write') { %><th>操作</th><% } %></tr>
+<tr><th>日期</th><th>备注</th><th class="num">金额</th><th>垫付人</th><th>待收</th><% if (mode === 'write') { %><th>操作</th><% } %></tr>
 <% pending.forEach(function(p){ %>
   <% p.unpaid.forEach(function(u){ %>
   <tr>
-    <td><%= p.occurred_at %></td>
+    <td style="white-space:nowrap"><%= p.occurred_at %></td>
     <td><%= p.note %></td>
-    <td class="amount expense"><%= p.amountYuan %></td>
+    <td class="num amount expense"><%= p.amountYuan %></td>
     <td><%= p.payer %></td>
-    <td><%= u %></td>
+    <td><span class="badge pending"><%= u %></span></td>
     <% if (mode === 'write') { %>
-    <td>
+    <td style="white-space:nowrap">
       <form class="inline" method="post" action="/w/<%= token %>/bills/<%= p.id %>/settle">
         <input type="hidden" name="participant_name" value="<%= u %>">
         <button>已收到</button>
@@ -38,6 +39,7 @@
   <% }) %>
 <% }) %>
 </table>
+</div>
 <% } %>
 
 <% } %>

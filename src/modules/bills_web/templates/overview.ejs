@@ -8,10 +8,30 @@
         <span class="badge <%= a.type === 'family' ? 'settled' : 'pending' %>"><%= a.type === 'family' ? '家庭账本' : '个人账本' %></span>
         <span class="muted">（<%= a.role %>）</span>
       </h2>
-      <div class="toolbar">
-        <span>本月收入 <b class="amount income"><%= a.income %></b> 元</span>
-        <span>本月支出 <b class="amount expense"><%= a.expense %></b> 元</span>
+
+      <div class="stat-row">
+        <div class="stat">
+          <div class="label">本月收入</div>
+          <div class="value income"><%= a.income %> 元</div>
+        </div>
+        <div class="stat">
+          <div class="label">本月支出</div>
+          <div class="value expense"><%= a.expense %> 元</div>
+        </div>
+        <div class="stat">
+          <div class="label">本月结余</div>
+          <div class="value <%= a.balanceClass %>"><%= a.balance %> 元</div>
+        </div>
+        <div class="stat">
+          <div class="label">支出环比上月</div>
+          <div class="value <%= a.momClass %>"><%= a.momText %></div>
+        </div>
       </div>
+
+      <% if (a.topCategories.length > 0) { %>
+      <div class="muted" style="margin-bottom:6px">本月支出 Top：<%= a.topCategories.map(function(c){ return c.category + ' ' + c.amountYuan + '元'; }).join('、') %></div>
+      <% } %>
+
       <div class="toolbar">
         <a href="/w/<%= token %>/bills?account_id=<%= a.id %>"><button class="ghost">账单</button></a>
         <a href="/w/<%= token %>/stats?account_id=<%= a.id %>"><button class="ghost">统计</button></a>

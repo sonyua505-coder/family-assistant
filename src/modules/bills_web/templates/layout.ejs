@@ -5,45 +5,95 @@
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title><%= title %></title>
 <style>
-body{font-family:system-ui,-apple-system,"Segoe UI",sans-serif;margin:0;background:#f5f6f8;color:#222}
-nav{background:#fff;padding:10px 16px;border-bottom:1px solid #e3e4e8;display:flex;gap:16px;flex-wrap:wrap;align-items:center}
-nav a{color:#2563eb;text-decoration:none;font-size:14px}
-nav .mode{color:#888;font-size:12px;margin-left:auto}
-main{max-width:880px;margin:16px auto;padding:0 16px 40px}
-h1{font-size:20px;margin:8px 0 14px}
-.card{background:#fff;border:1px solid #e3e4e8;border-radius:10px;padding:16px;margin-bottom:14px}
-.card h2{margin:0 0 10px;font-size:16px}
+:root{
+  --bg:#f4f6fb; --card:#fff; --border:#e4e8f0; --text:#1c2333; --muted:#6b7280;
+  --primary:#2563eb; --primary-soft:#eaf1fe; --green:#1a7f37; --green-soft:#e6f4ea;
+  --red:#c62828; --red-soft:#fdecea; --amber:#8a6d00; --amber-soft:#fff3cd;
+  --radius:12px; --radius-sm:8px; --shadow:0 1px 3px rgba(16,24,40,.06),0 1px 2px rgba(16,24,40,.04);
+  --shadow-hover:0 4px 12px rgba(16,24,40,.08);
+}
+*{box-sizing:border-box}
+body{font-family:system-ui,-apple-system,"Segoe UI","PingFang SC","Microsoft YaHei",sans-serif;margin:0;background:var(--bg);color:var(--text);line-height:1.55}
+nav{position:sticky;top:0;z-index:10;background:rgba(255,255,255,.92);backdrop-filter:blur(8px);padding:10px 18px;border-bottom:1px solid var(--border);display:flex;gap:4px;flex-wrap:wrap;align-items:center}
+nav .brand{font-weight:700;font-size:15px;color:var(--text);margin-right:8px}
+nav a{color:var(--primary);text-decoration:none;font-size:14px;padding:6px 12px;border-radius:var(--radius-sm);transition:background .15s}
+nav a:hover{background:var(--primary-soft)}
+nav .mode{color:var(--muted);font-size:12px;margin-left:auto;padding:4px 10px;border-radius:20px;background:var(--primary-soft);color:var(--primary);font-weight:600}
+main{max-width:920px;margin:0 auto;padding:20px 16px 48px}
+h1{font-size:20px;margin:4px 0 16px;font-weight:700}
+.card{background:var(--card);border:1px solid var(--border);border-radius:var(--radius);padding:18px;margin-bottom:14px;box-shadow:var(--shadow);transition:box-shadow .15s}
+.card:hover{box-shadow:var(--shadow-hover)}
+.card h2{margin:0 0 12px;font-size:16px;font-weight:600;display:flex;align-items:center;gap:8px;flex-wrap:wrap}
+/* 概览统计条 */
+.stat-row{display:flex;gap:16px;flex-wrap:wrap;margin-bottom:12px}
+.stat{flex:1;min-width:120px;background:var(--bg);border-radius:var(--radius-sm);padding:10px 14px}
+.stat .label{font-size:12px;color:var(--muted)}
+.stat .value{font-size:18px;font-weight:700;margin-top:2px}
+.up{color:var(--red)} .down{color:var(--green)} /* 支出升高=红，降低=绿 */
 table{width:100%;border-collapse:collapse;font-size:14px}
-th,td{padding:7px 8px;border-bottom:1px solid #f0f0f0;text-align:left;vertical-align:middle}
-th{color:#666;font-weight:600}
-.badge{display:inline-block;padding:1px 8px;border-radius:10px;font-size:12px}
-.badge.pending{background:#fff3cd;color:#8a6d00}
-.badge.settled{background:#e6f4ea;color:#1a7f37}
-.amount{font-variant-numeric:tabular-nums;font-weight:600}
-.income{color:#1a7f37}.expense{color:#c62828}
-.bar{background:#2563eb;height:10px;border-radius:5px;min-width:2px}
+.table-wrap{overflow-x:auto;-webkit-overflow-scrolling:touch}
+th,td{padding:9px 10px;border-bottom:1px solid #eef1f6;text-align:left;vertical-align:middle}
+th{color:var(--muted);font-weight:600;font-size:13px;white-space:nowrap;background:var(--bg)}
+tbody tr:nth-child(even){background:#fafbfe}
+tbody tr:hover{background:var(--primary-soft)}
+td.num,th.num{text-align:right;font-variant-numeric:tabular-nums;white-space:nowrap}
+.badge{display:inline-block;padding:2px 9px;border-radius:20px;font-size:12px;font-weight:600}
+.badge.pending{background:var(--amber-soft);color:var(--amber)}
+.badge.settled{background:var(--green-soft);color:var(--green)}
+.amount{font-variant-numeric:tabular-nums;font-weight:700}
+.income{color:var(--green)} .expense{color:var(--red)}
+/* 占比/走势条 */
+.bar-row{display:flex;align-items:center;gap:8px}
+.bar{background:linear-gradient(90deg,var(--primary),#60a5fa);height:10px;border-radius:6px;min-width:3px;flex:0 0 auto}
+.bar-track{flex:1;background:#eef1f6;border-radius:6px;height:10px;overflow:hidden}
+.bar-track .bar{height:100%;min-width:0}
+.bar-pct{font-size:12px;color:var(--muted);min-width:44px;text-align:right;font-variant-numeric:tabular-nums}
+/* 迷你柱状图（趋势） */
+.spark{display:flex;align-items:flex-end;gap:3px;height:36px}
+.spark .col{flex:1;border-radius:3px 3px 0 0;min-width:4px;background:var(--primary)}
+.spark .col.inc{background:var(--green)}
+.spark .col.exp{background:var(--red)}
 .toolbar{display:flex;gap:8px;align-items:center;flex-wrap:wrap;margin-bottom:14px}
-input,select,button{padding:6px 10px;border:1px solid #ccc;border-radius:6px;font-size:14px;font-family:inherit;box-sizing:border-box}
-button{background:#2563eb;color:#fff;border:none;cursor:pointer}
-button.danger{background:#c62828}
-button.ghost{background:#fff;color:#2563eb;border:1px solid #2563eb}
+input,select,button{padding:7px 11px;border:1px solid #cfd6e4;border-radius:var(--radius-sm);font-size:14px;font-family:inherit;background:#fff;color:var(--text)}
+input:focus,select:focus{outline:none;border-color:var(--primary);box-shadow:0 0 0 3px var(--primary-soft)}
+button{background:var(--primary);color:#fff;border:none;cursor:pointer;font-weight:600;transition:background .15s}
+button:hover{background:#1d4fd8}
+button.danger{background:var(--red)}
+button.danger:hover{background:#a01f1f}
+button.ghost{background:#fff;color:var(--primary);border:1px solid var(--primary)}
+button.ghost:hover{background:var(--primary-soft)}
 form.inline{display:inline;margin-right:4px}
-.muted{color:#888;font-size:13px}
-.empty{padding:40px;text-align:center;color:#999}
-.pager{margin-top:10px;font-size:14px}
-.pager a{margin:0 6px;color:#2563eb}
-.error{background:#fdecea;color:#b71c1c;border:1px solid #f5c6cb;border-radius:8px;padding:10px 14px;margin-bottom:12px}
+.muted{color:var(--muted);font-size:13px}
+.empty{padding:40px;text-align:center;color:var(--muted)}
+.pager{margin-top:14px;font-size:14px;display:flex;gap:12px;align-items:center;flex-wrap:wrap}
+.pager a{color:var(--primary);text-decoration:none;padding:5px 12px;border:1px solid var(--border);border-radius:var(--radius-sm)}
+.pager a:hover{background:var(--primary-soft);border-color:var(--primary)}
+.error{background:var(--red-soft);color:var(--red);border:1px solid #f5c6cb;border-radius:var(--radius-sm);padding:10px 14px;margin-bottom:12px}
+/* 移动端 */
+@media (max-width:640px){
+  nav{padding:8px 12px;gap:2px}
+  nav .brand{width:100%}
+  main{padding:14px 10px 40px}
+  h1{font-size:18px}
+  .card{padding:14px}
+  .toolbar{gap:6px}
+  .toolbar input,.toolbar select,.toolbar button{flex:1 1 auto;min-width:0}
+  button{white-space:nowrap}
+  .stat{min-width:100px;padding:8px 10px}
+  .stat .value{font-size:16px}
+}
 </style>
 </head>
 <body>
 <nav>
+  <span class="brand">家庭账本</span>
   <a href="/w/<%= token %>">总览</a>
   <a href="/w/<%= token %>/bills">账单</a>
   <a href="/w/<%= token %>/stats">统计</a>
   <a href="/w/<%= token %>/aa">待收</a>
   <a href="/w/<%= token %>/trash">回收站</a>
   <a href="/w/<%= token %>/export">导出CSV</a>
-  <span class="mode"><%= mode === 'write' ? '可写令牌' : '只读令牌' %></span>
+  <span class="mode"><%= mode === 'write' ? '可写' : '只读' %></span>
 </nav>
 <main><%- body %></main>
 </body>

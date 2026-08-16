@@ -246,6 +246,55 @@ try {
   const d2 = await get(`/api/v1/bills/${impIds[1]}`, 'openid-xiaoming');
   assert(d1.status === 200 && d2.status === 200, `import 的 2 笔合法行详情可查（id=${impIds.join(',')}，实得 ${d1.status}/${d2.status}）`);
   assert(d1.json && d1.json.note === '导入合法1' && d2.json && d2.json.note === '导入合法2', '详情内容与导入行一致');
+
+  // ── Web 页面（/w/:token）渲染与筛选 ──
+
+  // 5.0 铸造 write 令牌
+  const tok = await post('/api/v1/web/tokens', 'openid-xiaoming', { mode: 'write' });
+  assert(tok.status === 200 && tok.json && tok.json.token, `铸造 write 令牌成功（实得 ${tok.status}）`);
+  const wtoken = tok.json.token;
+
+  // 5.1 各页面渲染 200 + 新元素存在
+  const pages = [
+    ['', '总览'],
+    ['/bills', '账单'],
+    ['/stats', '统计'],
+    ['/aa', '待收'],
+    ['/trash', '回收站'],
+  ];
+  for (const [suffix, label] of pages) {
+    const r = await fetch(`${api}/w/${wtoken}${suffix}`, { headers: H('openid-xiaoming') });
+    const html = await r.text();
+    assert(r.status === 200, `${label} 页返回 200（实得 ${r.status}）`);
+    if (label === '总览') {
+      assert(html.includes('本月结余') && html.includes('支出环比上月'), '总览含结余/环比元素');
+      assert(html.includes('本月支出 Top'), '总览含支出 Top 元素');
+      assert(html.includes('stat-row') && html.includes('stat'), '总览含 stat-row 卡片');
+    }
+    if (label === '统计') {
+      assert(html.includes('bar-track') && html.includes('bar-pct'), '统计含渐变条/百分比元素');
+      assert(html.includes('结余'), '统计含结余');
+    }
+    if (label === '账单') {
+      assert(html.includes('name="amount_min"') && html.includes('name="amount_max"'), '账单含金额区间筛选');
+      assert(html.includes('name="status"') && html.includes('name="participant"'), '账单含状态/参与人筛选');
+      assert(html.includes('table-wrap'), '账单含移动端表格容器');
+    }
+  }
+
+  // 5.2 账单页金额/状态筛选生效
+  const f = await fetch(
+    `${api}/w/${wtoken}/bills?account_id=${acc1}&type=expense&status=settled&amount_min=50&amount_max=90`,
+    { headers: H('openid-xiaoming') },
+  );
+  const fhtml = await f.text();
+  assert(f.status === 200 && fhtml.includes('共'), `筛选后账单页 200（实得 ${f.status}）`);
+
+  // 5.3 只读令牌不显示写表单
+  const roTok = await post('/api/v1/web/tokens', 'openid-xiaoming', { mode: 'read' });
+  const ro = await fetch(`${api}/w/${roTok.json.token}/bills`, { headers: H('openid-xiaoming') });
+  const roHtml = await ro.text();
+  assert(roHtml.includes('只读') && !roHtml.includes('记一笔'), '只读令牌隐藏写表单');
 } finally {
   child.kill();
   await new Promise((r) => setTimeout(r, 300));

@@ -89,6 +89,19 @@ async function get(path, openid) {
   return { status: r.status, json, text, buf, headers: r.headers };
 }
 
+async function post(path, openid, body) {
+  const r = await fetch(`${api}${path}`, {
+    method: 'POST',
+    headers: { ...H(openid), 'content-type': 'application/json' },
+    body: JSON.stringify(body),
+  });
+  const buf = Buffer.from(await r.arrayBuffer());
+  const text = buf.toString('utf8');
+  let json = null;
+  try { json = JSON.parse(text); } catch {}
+  return { status: r.status, json, text, headers: r.headers };
+}
+
 function assert(cond, msg) {
   if (!cond) {
     console.error(`❌ FAIL: ${msg}`);
@@ -160,6 +173,79 @@ try {
 
   const bad2 = await get('/api/v1/bills/stats/range?from=2026-05&to=2026-04', 'openid-xiaoming');
   assert(bad2.status === 400 && bad2.json && (bad2.json.code === 'INVALID_FROM' || bad2.json.code === 'INVALID_RANGE'), `from 非法 → 400（实得 ${bad2.status} ${bad2.json?.code}）`);
+
+  // ── 方向 B：宽容批量导入 ──
+
+  // 4.1 import 混入合法+非法行：合法入库、非法行返回明细、fail_count 正确
+  const imp1 = await post('/api/v1/bills/import', 'openid-xiaoming', {
+    bills: [
+      { type: 'expense', amount: 100, category: '餐饮', note: '导入合法1' },
+      { type: 'expense', amount: -5, category: '餐饮', note: '金额非法' }, // INVALID_AMOUNT
+      { type: 'expense', amount: 200, category: '不存在的分类', note: '分类非法' }, // INVALID_CATEGORY
+      { type: 'foo', amount: 300, note: '类型非法' }, // INVALID_TYPE
+      { type: 'expense', amount: 400, category: '交通', occurred_at: '2026/05/01', note: '日期非法' }, // INVALID_OCCURRED_AT
+      { type: 'income', amount: 500, category: '其他', note: '导入合法2' },
+    ],
+  });
+  assert(imp1.status === 200, `import 返回 200（实得 ${imp1.status}）`);
+  assert(imp1.json && imp1.json.total === 6, `import total=6（实得 ${imp1.json?.total}）`);
+  assert(imp1.json && imp1.json.ok_count === 2 && imp1.json.fail_count === 4, `import ok=2 fail=4（实得 ${imp1.json?.ok_count}/${imp1.json?.fail_count}）`);
+  assert(imp1.json && imp1.json.inserted.length === 2 && imp1.json.inserted[0].index === 0, 'inserted 含 index 0 与 5（首项 index=0）');
+  assert(imp1.json && imp1.json.inserted[1] && imp1.json.inserted[1].index === 5, 'inserted[1].index=5（末项合法）');
+  const failCodes = (imp1.json?.failures || []).map((f) => `${f.index}:${f.code}`).join(',');
+  assert(
+    imp1.json && imp1.json.failures.length === 4 &&
+      imp1.json.failures[0].code === 'INVALID_AMOUNT' &&
+      imp1.json.failures[1].code === 'INVALID_CATEGORY' &&
+      imp1.json.failures[2].code === 'INVALID_TYPE' &&
+      imp1.json.failures[3].code === 'INVALID_OCCURRED_AT',
+    `failures 明细含 4 类错误码（index:code = ${failCodes}）`,
+  );
+
+  // 4.2 全非法：返回 200 + 全 failures，0 入库
+  const imp2 = await post('/api/v1/bills/import', 'openid-xiaoming', {
+    bills: [
+      { type: 'expense', amount: 0, note: '金额为0' },
+      { type: 'expense', amount: 1, category: 'xx', note: '坏分类' },
+    ],
+  });
+  assert(imp2.status === 200, '全非法 import 仍返回 200（不整批 400）');
+  assert(imp2.json && imp2.json.ok_count === 0 && imp2.json.fail_count === 2, `全非法 ok=0 fail=2（实得 ${imp2.json?.ok_count}/${imp2.json?.fail_count}）`);
+  assert(imp2.json && imp2.json.inserted.length === 0, '全非法 0 入库');
+
+  // 4.3 越权：小明往小红账本导入 → 403
+  const imp3 = await post(`/api/v1/bills/import`, 'openid-xiaoming', {
+    account_id: acc2,
+    bills: [{ type: 'expense', amount: 10 }],
+  });
+  assert(imp3.status === 403, `越权导入他人账本 → 403（实得 ${imp3.status}）`);
+
+  // 4.4 超 500 笔 → 400 TOO_MANY
+  const many = Array.from({ length: 501 }, () => ({ type: 'expense', amount: 1 }));
+  const imp4 = await post('/api/v1/bills/import', 'openid-xiaoming', { bills: many });
+  assert(imp4.status === 400 && imp4.json && imp4.json.code === 'TOO_MANY', `超 500 笔 → 400 TOO_MANY（实得 ${imp4.status} ${imp4.json?.code}）`);
+
+  // 4.5 回归：旧 batch 全有或全无语义不变（一行坏 → 整批回滚 400，且不新增任何行）
+  // 用全局总数对比：import 后 total=6，batch 若部分成功会 +1 → total=7；全有或全无应为 6。
+  const beforeBatch = await get('/api/v1/bills/export', 'openid-xiaoming');
+  assert(beforeBatch.json && beforeBatch.json.total === 6, `batch 前 total=6（实得 ${beforeBatch.json?.total}）`);
+  const bt = await post('/api/v1/bills/batch', 'openid-xiaoming', {
+    bills: [
+      { type: 'expense', amount: 100, note: 'batch合法' },
+      { type: 'expense', amount: -1, note: 'batch非法' },
+    ],
+  });
+  assert(bt.status === 400 && bt.json && bt.json.code === 'INVALID_AMOUNT', `旧 batch 一行坏 → 整批 400 INVALID_AMOUNT（实得 ${bt.status} ${bt.json?.code}）`);
+  const afterBatch = await get('/api/v1/bills/export', 'openid-xiaoming');
+  assert(afterBatch.json && afterBatch.json.total === 6, `batch 回滚后 total 仍=6，合法行未入库（实得 ${afterBatch.json?.total}）`);
+
+  // 4.6 import 的 2 笔合法行可用详情接口查到（按返回的 id）
+  const impIds = (imp1.json?.inserted || []).map((x) => x.id);
+  assert(impIds.length === 2, `import 返回 2 个 id（实得 ${impIds.length}）`);
+  const d1 = await get(`/api/v1/bills/${impIds[0]}`, 'openid-xiaoming');
+  const d2 = await get(`/api/v1/bills/${impIds[1]}`, 'openid-xiaoming');
+  assert(d1.status === 200 && d2.status === 200, `import 的 2 笔合法行详情可查（id=${impIds.join(',')}，实得 ${d1.status}/${d2.status}）`);
+  assert(d1.json && d1.json.note === '导入合法1' && d2.json && d2.json.note === '导入合法2', '详情内容与导入行一致');
 } finally {
   child.kill();
   await new Promise((r) => setTimeout(r, 300));

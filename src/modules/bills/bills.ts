@@ -455,6 +455,43 @@ export function batchCreateBills(
   return insert();
 }
 
+export interface ImportBillFailure {
+  index: number;    // 在传入 bills 数组中的下标（LLM 定位坏行）
+  code: string;     // 业务错误码，如 INVALID_AMOUNT
+  message: string;
+}
+
+/**
+ * 宽容批量导入（方向 B，文件导入用）：
+ * 逐行校验、跳过坏行——合法行插入并返回 id，非法行记录 {index, code, message} 不阻断整批。
+ * 与 batchCreateBills（全有或全无语义，add_bills 工具用）不同：这里单行业务校验失败被捕获，
+ * 但非业务异常（如 DB 约束错误）仍继续抛，整事务回滚兜底。
+ */
+export function importBills(
+  db: Database.Database,
+  input: { bills: CreateBillInput[]; account_id: number; person_id: number },
+): { inserted: Array<{ index: number; id: number }>; failures: ImportBillFailure[] } {
+  const inserted: Array<{ index: number; id: number }> = [];
+  const failures: ImportBillFailure[] = [];
+
+  db.transaction(() => {
+    input.bills.forEach((b, i) => {
+      try {
+        const id = createBill(db, { ...b, account_id: input.account_id, person_id: input.person_id });
+        inserted.push({ index: i, id });
+      } catch (e) {
+        if (e instanceof AppError) {
+          failures.push({ index: i, code: e.code, message: e.message });
+        } else {
+          throw e; // 非业务异常：继续抛，整事务回滚
+        }
+      }
+    });
+  })();
+
+  return { inserted, failures };
+}
+
 // ── 统计 ──
 
 export interface StatsQuery {

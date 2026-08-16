@@ -20,6 +20,7 @@ import {
   exportBills,
   getActiveBill,
   getBillAny,
+  importBills,
   listBills,
   listTrash,
   resolveAccountId,
@@ -281,6 +282,37 @@ export async function registerBillsRoutes(app: FastifyInstance, deps: BillsRoute
       logBillOp(personId, 'bill.create', id, undefined, bill);
     }
     return { ok: true, count: ids.length, bill_ids: ids };
+  });
+
+  // ── 宽容批量导入（方向 B：逐行校验、跳过坏行，供文件导入后批量入库）──
+  // 与 /batch 不同：某行字段非法不会整批回滚，而是记入 failures 明细（index/code/message），
+  // 合法行照常入库。返回每行结果，让 LLM 定位坏行针对性修复重试。
+  app.post('/api/v1/bills/import', { preHandler: requireBoundPerson }, async (req) => {
+    const personId = me(req);
+    const body = (req.body ?? {}) as { bills?: unknown; account_id?: unknown };
+    if (!Array.isArray(body.bills) || body.bills.length === 0) {
+      throw new AppError(400, 'INVALID_BODY', 'body 需 { bills: [...], account_id? }');
+    }
+    if (body.bills.length > 500) throw new AppError(400, 'TOO_MANY', '单次最多 500 笔（可分多次导入）');
+    const accountId = resolveAccountId(db, personId, typeof body.account_id === 'number' ? body.account_id : undefined);
+    const { inserted, failures } = importBills(db, {
+      bills: body.bills as CreateBillInput[],
+      account_id: accountId,
+      person_id: personId,
+    });
+    // 成功行记日志（供日报/变动查询）
+    for (const { id } of inserted) {
+      const bill = getActiveBill(db, id)!;
+      logBillOp(personId, 'bill.create', id, undefined, bill);
+    }
+    return {
+      ok: true,
+      total: body.bills.length,
+      ok_count: inserted.length,
+      fail_count: failures.length,
+      inserted,
+      failures,
+    };
   });
 
   // ── 账单变动（on-demand 版日报，工具 query_bill_changes）──

@@ -1,7 +1,7 @@
 # 家庭信息助理 · AstrBot 插件 LLM 工具清单（实测）
 
 > 来源：云端运行态 `/opt/homeassistant/plugins/astrbot_star_homeassistant/main.py`
-> 整理日期：2026-08-15
+> 整理日期：2026-08-15（2026-08-16 同步到 38 个：新增 bill_stats / export_bills，对接方向 A 新端点）
 > 用途：本地设计文档的权威对照。**新增工具不得与下表重名/同义**；本地要加新工具时，先在文档里追加条目再开发，避免云端部署时撞名。
 
 ## 0. 插件骨架（非工具，但契约相关）
@@ -9,13 +9,13 @@
 | 项 | 实现 |
 |----|------|
 | 插件名 | `astrbot_star_homeassistant`（display: 家庭信息助理） |
-| 配置 | `api_base`（默认 `http://homeassistant-api:3000`）、`api_key`（=X_API_KEY）、`poll_interval`（默认 15s） |
+| 配置 | `api_base`（默认 `http://homeassistant-api:3000`）、`api_key`（=X_API_KEY）、`poll_interval`（默认 15s）、`disable_legacy_query_tools`（bool，默认 false，验证新工具期间停用旧查询/统计工具） |
 | 身份注入 | 插件按入站事件自动加 `x-platform=qq`、`x-openid=发送者openid`，**不是 LLM 参数** |
 | 会话捕获 | `@filter.regex(r".*")` 记录 openid→UMO 映射，供主动推送定位会话 |
 | outbox 主动推送 | 后台轮询 `GET /api/v1/outbox/pending?channel=qq&limit=10` → `context.send_message` → 回执 `POST /api/v1/outbox/{id}/delivery` |
 | 平台 id | 从 UMO 首段推断（qq_official），无命中时按 `{platform}:FriendMessage:{openid}` 构造 C2C 会话 |
 
-## 1. 工具总表（36 个）
+## 1. 工具总表（38 个）
 
 | # | 工具名 | 功能 | 后端端点 |
 |---|--------|------|----------|
@@ -55,6 +55,8 @@
 | 34 | `create_ledger_link` | 生成账本网页链接 | POST `api/v1/web/tokens` |
 | 35 | `list_ledger_links` | 列出已生成账本链接 | GET `api/v1/web/tokens` |
 | 36 | `revoke_ledger_link` | 撤销账本链接 | DELETE `api/v1/web/tokens/{id}` |
+| 37 | `bill_stats` | 收支统计（含图表，chart=true 发统计图） | GET `api/v1/bills/stats/range` |
+| 38 | `export_bills` | 账单明细查询/CSV 导出（text/workspace/user/both） | GET `api/v1/bills/export` |
 
 ## 2. 各工具 LLM 参数签名
 
@@ -81,9 +83,11 @@
 - `restore_bill(bill_id: int)` — 从回收站恢复
 - `get_bill(bill_id: int)` — 单笔完整详情（参与人/备注/发生时间/状态）
 - `settle_bill(bill_id: int, participant_name?: str, all?: bool)`
-- `list_bills(account_id?: int, month?: str)` — month 格式 YYYY-MM
-- `query_bill_stats(year?: int, month?: int, account_id?: int)`
+- `list_bills(account_id?: int, month?: str)` — month 格式 YYYY-MM（旧工具，可被 `export_bills` 替代）
+- `query_bill_stats(year?: int, month?: int, account_id?: int)` — 旧工具，指向旧 `GET /bills/stats`；新统计用 `bill_stats`
 - `query_bill_changes(date?: str)` — date 格式 YYYY-MM-DD
+- `bill_stats(year?: int, month?: int, from_date?: str, to_date?: str, category?: str, amount_min?: int, amount_max?: int, account_id?: int, chart?: bool=True)` — 区间统计（`from_date/to_date` 优先于 `year/month`；金额单位「分」；`chart=True` 时 matplotlib 渲染「支出构成+收支趋势」PNG 并发送，金额展示为「元」）；后端 `GET /api/v1/bills/stats/range`
+- `export_bills(type?: str, category?: str, status?: str, participant?: str, month?: str, year?: int, from_date?: str, to_date?: str, amount_min?: int, amount_max?: int, account_id?: int, destination?: str="text", relative_path?: str, limit?: int=20)` — destination ∈ {text, workspace, user, both}；text 走 json 明细（limit 上限 50），文件导出走 csv（workspace 存当前会话工作区按 `relative_path` 或自动命名，user 直接发 CSV 文件，both 两者）；后端 `GET /api/v1/bills/export`
 
 ### 待办域
 - `add_task(content: str, category?: str, remind_at?: str, account_id?: int)` — remind_at 格式 YYYY-MM-DD HH:MM
@@ -122,10 +126,12 @@
 6. **source_type 因工具而异**：`subscribe_source` 只收 rss|preset；`fetch_source` 收 rss|url|preset。
 7. **身份不在 LLM 参数里**：x-platform/x-openid 由插件注入，LLM 猜不到也传不了——本地设计文档不要设计「让 LLM 传身份」的工具。
 8. **`get_my_identity` 未登记时返回引导语**，引导链：create_person → create_account → add_bill。
+9. **新查询/统计工具（方向 A，2026-08-16 云端上线）**：`export_bills`/`bill_stats` 对接 `/bills/export` 与 `/bills/stats/range`；金额过滤单位「分」；后端回显 `applied`（实际生效筛选），工具回复带「已生效筛选」供 LLM 自验证；`bill_stats` 图表由插件 matplotlib 渲染 PNG 直接发送。
+10. **旧工具可整体停用**：配置 `disable_legacy_query_tools=true` 时停用 list_bills/get_bill/query_bill_stats/query_bill_changes/list_bill_trash/restore_bill（`context.deactivate_llm_tool`，持久化到 shared_preferences）。
 
 ## 4. 新工具开发约定（写进本地文档）
 
-- 新增工具**先确认不与上表 36 个重名**（含语义相同仅改名的，如已有 `add_bill` 就别再写 `record_bill`/`log_expense`）。
+- 新增工具**先确认不与上表 38 个重名**（含语义相同仅改名的，如已有 `add_bill` 就别再写 `record_bill`/`log_expense`）。
 - 每个工具 = `@filter.llm_tool(name="...")` + async 方法 + **带 Args 的 docstring**（AstrBot 用 docstring 生成 LLM 工具描述，参数名/类型/单位/枚举都要写清楚）。
 - 走 `self._api(method, path, identity=self._identity(event), json_body=...)`，统一错误返回为失败字典。
 - 工具描述里写明行为约定（如 add_bill 的 AA 规则、participants 格式），LLM 靠描述触发正确调用。

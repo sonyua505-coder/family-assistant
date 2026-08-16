@@ -152,17 +152,20 @@ export interface BillListQuery {
   year?: string;    // YYYY
   from?: string;    // YYYY-MM-DD
   to?: string;      // YYYY-MM-DD
+  amount_min?: number;  // 金额下界（分）
+  amount_max?: number;  // 金额上界（分）
   page?: number;
   page_size?: number;
 }
 
 /**
- * 列表查询（账户内），支持类型/分类/状态/参与人/月份/年份/日期区间筛选 + 分页。
- * 按发生时间倒序。返回 { items, total, page, page_size }。
+ * 共享账单过滤条件构建器（listBills / exportBills / billStatsRange 共用）。
+ * 返回 WHERE 片段 conds 与参数 args，二者按顺序配对（`conds.join(' AND ')` + `...args`）。
+ * 支持类型/分类/状态/参与人/月份/年份/日期区间/金额区间。错误码与 listBills 原行为一致。
  */
-export function listBills(db: Database.Database, accountId: number, q: BillListQuery) {
-  const conds: string[] = ['account_id = ?', 'is_deleted = 0'];
-  const args: unknown[] = [accountId];
+export function buildBillFilter(q: BillListQuery): { conds: string[]; args: unknown[] } {
+  const conds: string[] = ['is_deleted = 0'];
+  const args: unknown[] = [];
 
   if (q.type) {
     if (q.type !== 'income' && q.type !== 'expense') throw new AppError(400, 'INVALID_TYPE', 'type 需为 income 或 expense');
@@ -202,38 +205,84 @@ export function listBills(db: Database.Database, accountId: number, q: BillListQ
     conds.push('occurred_at <= ?');
     args.push(`${q.to} 23:59:59`);
   }
+  if (q.amount_min !== undefined && q.amount_min !== null) {
+    if (!Number.isInteger(q.amount_min) || q.amount_min < 0) throw new AppError(400, 'INVALID_AMOUNT_MIN', 'amount_min 需为非负整数（分）');
+    conds.push('amount >= ?');
+    args.push(q.amount_min);
+  }
+  if (q.amount_max !== undefined && q.amount_max !== null) {
+    if (!Number.isInteger(q.amount_max) || q.amount_max < 0) throw new AppError(400, 'INVALID_AMOUNT_MAX', 'amount_max 需为非负整数（分）');
+    conds.push('amount <= ?');
+    args.push(q.amount_max);
+  }
 
-  const where = conds.join(' AND ');
-  const total = (db.prepare(`SELECT COUNT(*) n FROM bills WHERE ${where}`).get(...args) as { n: number }).n;
+  return { conds, args };
+}
+
+/**
+ * 列表查询（账户内），支持类型/分类/状态/参与人/月份/年份/日期区间/金额区间筛选 + 分页。
+ * 按发生时间倒序。返回 { items, total, page, page_size }。
+ */
+export function listBills(db: Database.Database, accountId: number, q: BillListQuery) {
+  const { conds, args } = buildBillFilter(q);
+  const condsWithAccount = ['account_id = ?', ...conds];
+  const argsWithAccount = [accountId, ...args];
+
+  const where = condsWithAccount.join(' AND ');
+  const total = (db.prepare(`SELECT COUNT(*) n FROM bills WHERE ${where}`).get(...argsWithAccount) as { n: number }).n;
 
   const page = Number.isInteger(q.page) && (q.page as number) > 0 ? (q.page as number) : 1;
   const pageSize = Number.isInteger(q.page_size) && (q.page_size as number) > 0 ? Math.min(q.page_size as number, 200) : 50;
   const rows = db
     .prepare(`SELECT * FROM bills WHERE ${where} ORDER BY occurred_at DESC, id DESC LIMIT ? OFFSET ?`)
-    .all(...args, pageSize, (page - 1) * pageSize) as BillRow[];
+    .all(...argsWithAccount, pageSize, (page - 1) * pageSize) as BillRow[];
 
   return { items: rows.map(toOut), total, page, page_size: pageSize };
 }
 
-/** CSV 导出用：账户内全部未删除账单（可选日期区间，无分页上限）。 */
-export function exportBills(
-  db: Database.Database,
-  accountId: number,
-  range?: { from?: string; to?: string },
-): BillRow[] {
-  const conds = ['account_id = ?', 'is_deleted = 0'];
-  const args: unknown[] = [accountId];
-  if (range?.from) {
-    conds.push('occurred_at >= ?');
-    args.push(`${range.from} 00:00:00`);
-  }
-  if (range?.to) {
-    conds.push('occurred_at <= ?');
-    args.push(`${range.to} 23:59:59`);
-  }
+/**
+ * 全量导出（无分页上限）：账户内全部未删除账单，支持宽过滤（复用 buildBillFilter）。
+ * 兼容旧调用 `exportBills(db, accountId, { from, to })`。按发生时间升序。
+ */
+export function exportBills(db: Database.Database, accountId: number, q: BillListQuery = {}): BillRow[] {
+  const { conds, args } = buildBillFilter(q);
+  const condsWithAccount = ['account_id = ?', ...conds];
+  const argsWithAccount = [accountId, ...args];
   return db
-    .prepare(`SELECT * FROM bills WHERE ${conds.join(' AND ')} ORDER BY occurred_at, id`)
-    .all(...args) as BillRow[];
+    .prepare(`SELECT * FROM bills WHERE ${condsWithAccount.join(' AND ')} ORDER BY occurred_at, id`)
+    .all(...argsWithAccount) as BillRow[];
+}
+
+// ── CSV 展示辅助（bills_web /w 导出 与 新 /api/v1/bills/export 共用）──
+
+/** 分 → 元字符串（整数不带小数）。 */
+export function yuan(fen: number): string {
+  return (fen / 100).toFixed(fen % 100 ? 2 : 0);
+}
+
+/** CSV 单元格清洗 + 防公式注入（' 前缀清洗 =+-@ 开头单元格）。 */
+export function csvCell(v: string): string {
+  let s = v ?? '';
+  if (/^[=+\-@]/.test(s)) s = `'${s}`; // 防公式注入
+  if (/[",\r\n]/.test(s)) s = `"${s.replace(/"/g, '""')}"`; // 含分隔符/引号/换行则加引号
+  return s;
+}
+
+/** CSV 构建（列：日期/类型/分类/金额(元)/备注/状态/参与人）。 */
+export function buildBillCsv(bills: BillRow[]): string {
+  const header = ['日期', '类型', '分类', '金额(元)', '备注', '状态', '参与人'];
+  const rows = bills.map((b) => [
+    b.occurred_at,
+    b.type === 'income' ? '收入' : '支出',
+    b.category,
+    yuan(b.amount),
+    b.note,
+    b.status === 'pending' ? '待结算' : '已结清',
+    parseParticipants(b.participants)
+      .map((p) => p.name)
+      .join('、'),
+  ]);
+  return [header, ...rows].map((row) => row.map(csvCell).join(',')).join('\r\n');
 }
 
 // ── 写操作 ──
@@ -459,6 +508,145 @@ export function billStats(db: Database.Database, accountId: number, q: StatsQuer
   });
 
   return { income, expense, by_category: byCategory, trend };
+}
+
+// ── 区间统计（新接口 /api/v1/bills/stats/range，方向 A）──
+
+export interface StatsRangeQuery {
+  from?: string;       // YYYY-MM-DD
+  to?: string;         // YYYY-MM-DD
+  year?: number;       // 与 month 一起用
+  month?: number;      // 1-12
+  category?: string;
+  amount_min?: number; // 分
+  amount_max?: number; // 分
+}
+
+/**
+ * 区间统计（账户内，不含已删除）：
+ *  - 与 billStats 的区别：income/expense 合计与 by_category **尊重区间**（from/to/year/month），
+ *    并支持金额区间过滤；额外返回 net（净收支）与 applied（生效筛选回显，供 LLM 自验证）。
+ *  - 区间推导：显式 from/to 优先；year+month → 当月；year → 全年；都不给 → 全量。
+ *  - trend：显式 from/to 时覆盖区间内所有月份，否则沿用 trendMonths 逻辑。
+ */
+export function billStatsRange(db: Database.Database, accountId: number, q: StatsRangeQuery) {
+  const range = resolveStatsRange(q);
+
+  const conds: string[] = ['account_id = ?', 'is_deleted = 0'];
+  const args: unknown[] = [accountId];
+  if (range.from) {
+    conds.push('occurred_at >= ?');
+    args.push(`${range.from} 00:00:00`);
+  }
+  if (range.to) {
+    conds.push('occurred_at <= ?');
+    args.push(`${range.to} 23:59:59`);
+  }
+  if (q.category) {
+    if (!BILL_CATEGORIES.includes(q.category as BillCategory)) throw new AppError(400, 'INVALID_CATEGORY', `category 非法: ${q.category}`);
+    conds.push('category = ?');
+    args.push(q.category);
+  }
+  if (q.amount_min !== undefined && q.amount_min !== null) {
+    if (!Number.isInteger(q.amount_min) || q.amount_min < 0) throw new AppError(400, 'INVALID_AMOUNT_MIN', 'amount_min 需为非负整数（分）');
+    conds.push('amount >= ?');
+    args.push(q.amount_min);
+  }
+  if (q.amount_max !== undefined && q.amount_max !== null) {
+    if (!Number.isInteger(q.amount_max) || q.amount_max < 0) throw new AppError(400, 'INVALID_AMOUNT_MAX', 'amount_max 需为非负整数（分）');
+    conds.push('amount <= ?');
+    args.push(q.amount_max);
+  }
+  const where = conds.join(' AND ');
+
+  const totals = db
+    .prepare(`SELECT type, SUM(amount) total, COUNT(*) n FROM bills WHERE ${where} GROUP BY type`)
+    .all(...args) as { type: BillType; total: number; n: number }[];
+  const income = totals.find((t) => t.type === 'income')?.total ?? 0;
+  const expense = totals.find((t) => t.type === 'expense')?.total ?? 0;
+
+  const byCategory = db
+    .prepare(
+      `SELECT category, SUM(amount) amount, COUNT(*) count FROM bills
+       WHERE ${where} AND type = 'expense' GROUP BY category ORDER BY amount DESC`,
+    )
+    .all(...args) as { category: string; amount: number; count: number }[];
+
+  // 趋势月份：显式 from/to → 区间内所有月份；否则沿用 trendMonths 逻辑
+  const months = range.from && range.to ? monthsInRange(range.from, range.to) : trendMonths(q.year, q.month);
+  const trend = months.map((ym) => {
+    const row = db
+      .prepare(
+        `SELECT
+           SUM(CASE WHEN type = 'income' THEN amount ELSE 0 END) income,
+           SUM(CASE WHEN type = 'expense' THEN amount ELSE 0 END) expense
+         FROM bills WHERE ${where} AND strftime('%Y-%m', occurred_at) = ?`,
+      )
+      .get(...args, ym) as { income: number; expense: number };
+    return { month: ym, income: row.income, expense: row.expense };
+  });
+
+  return {
+    income,
+    expense,
+    net: income - expense,
+    by_category: byCategory,
+    trend,
+    applied: {
+      from: range.from ?? null,
+      to: range.to ?? null,
+      category: q.category ?? null,
+      amount_min: q.amount_min ?? null,
+      amount_max: q.amount_max ?? null,
+    },
+  };
+}
+
+/** 推导统计区间为 YYYY-MM-DD 边界（可 null = 不限）。from/to 显式优先，其次 year/month，无则全量。 */
+function resolveStatsRange(q: StatsRangeQuery): { from: string | null; to: string | null } {
+  if (q.from || q.to) {
+    if (q.from && !/^\d{4}-\d{2}-\d{2}$/.test(q.from)) throw new AppError(400, 'INVALID_FROM', 'from 需为 YYYY-MM-DD');
+    if (q.to && !/^\d{4}-\d{2}-\d{2}$/.test(q.to)) throw new AppError(400, 'INVALID_TO', 'to 需为 YYYY-MM-DD');
+    if (q.from && q.to && q.from > q.to) throw new AppError(400, 'INVALID_RANGE', 'from 不能晚于 to');
+    return { from: q.from ?? null, to: q.to ?? null };
+  }
+  if (q.year !== undefined) {
+    const y = q.year;
+    if (!Number.isInteger(y) || y < 2000 || y > 3000) throw new AppError(400, 'INVALID_YEAR', 'year 需为 YYYY');
+    const pad = (v: number) => String(v).padStart(2, '0');
+    if (q.month !== undefined) {
+      const m = q.month;
+      if (!Number.isInteger(m) || m < 1 || m > 12) throw new AppError(400, 'INVALID_MONTH', 'month 需为 1-12');
+      return { from: `${y}-${pad(m)}-01`, to: `${y}-${pad(m)}-${pad(daysInMonth(y, m))}` };
+    }
+    return { from: `${y}-01-01`, to: `${y}-12-31` };
+  }
+  return { from: null, to: null };
+}
+
+/** 某年某月的天数（1-31）。 */
+function daysInMonth(year: number, month: number): number {
+  return new Date(year, month, 0).getDate();
+}
+
+/** 生成 [from, to]（YYYY-MM-DD）区间内的所有月份（YYYY-MM）。 */
+function monthsInRange(from: string, to: string): string[] {
+  const [fy, fm] = from.split('-').map(Number) as [number, number, number];
+  const [ty, tm] = to.split('-').map(Number) as [number, number, number];
+  const out: string[] = [];
+  let y = fy;
+  let m = fm;
+  let guard = 0;
+  while (y < ty || (y === ty && m <= tm)) {
+    out.push(`${y}-${String(m).padStart(2, '0')}`);
+    m += 1;
+    if (m > 12) {
+      m = 1;
+      y += 1;
+    }
+    if (++guard > 480) break; // 防呆：最长 40 年
+  }
+  return out;
 }
 
 /** 生成趋势要展示的月份列表（YYYY-MM）。 */

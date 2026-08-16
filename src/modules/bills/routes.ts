@@ -14,7 +14,10 @@ import {
   batchCreateBills,
   billChanges,
   billStats,
+  billStatsRange,
+  buildBillCsv,
   createBill,
+  exportBills,
   getActiveBill,
   getBillAny,
   listBills,
@@ -25,6 +28,7 @@ import {
   softDeleteBill,
   toOut,
   updateBill,
+  type BillListQuery,
   type BillRow,
   type CreateBillInput,
   type StatsQuery,
@@ -178,6 +182,68 @@ export async function registerBillsRoutes(app: FastifyInstance, deps: BillsRoute
     }
     if (q.category !== undefined) stats.category = q.category;
     return billStats(db, accountId, stats);
+  });
+
+  // ── 全量宽过滤查询/导出（方向 A：强大查询工具后端接口）──
+  // format=json 默认 → { total, applied(生效筛选回显), items }，金额「分」，全量无分页；
+  // format=csv → text/csv（UTF-8 BOM + 防公式注入，金额「元」人可读）。
+  app.get('/api/v1/bills/export', { preHandler: requireBoundPerson }, async (req, reply) => {
+    const personId = me(req);
+    const accountId = resolveAccountId(db, personId, num((req.query as Record<string, unknown>).account_id));
+    const q = req.query as Record<string, string | undefined>;
+    const filter: BillListQuery = {
+      type: q.type,
+      category: q.category,
+      status: q.status,
+      participant: q.participant,
+      month: q.month,
+      year: q.year,
+      from: q.from,
+      to: q.to,
+      amount_min: q.amount_min !== undefined ? Number(q.amount_min) : undefined,
+      amount_max: q.amount_max !== undefined ? Number(q.amount_max) : undefined,
+    };
+
+    const bills = exportBills(db, accountId, filter);
+
+    // 回显实际生效的筛选（供 LLM 自验证）
+    const applied: Record<string, string | number> = { account_id: accountId };
+    if (filter.type) applied.type = filter.type;
+    if (filter.category) applied.category = filter.category;
+    if (filter.status) applied.status = filter.status;
+    if (filter.participant) applied.participant = filter.participant;
+    if (filter.month) applied.month = filter.month;
+    if (filter.year) applied.year = filter.year;
+    if (filter.from) applied.from = filter.from;
+    if (filter.to) applied.to = filter.to;
+    if (filter.amount_min !== undefined) applied.amount_min = filter.amount_min;
+    if (filter.amount_max !== undefined) applied.amount_max = filter.amount_max;
+
+    if (q.format === 'csv') {
+      const csv = buildBillCsv(bills);
+      reply.header('Content-Type', 'text/csv; charset=utf-8');
+      reply.header('Content-Disposition', 'attachment; filename="bills-export.csv"');
+      return reply.send(`﻿${csv}`);
+    }
+    return { total: bills.length, applied, items: bills.map(toOut) };
+  });
+
+  // ── 区间统计（方向 A：强大统计工具后端接口，合计/分类/趋势全部尊重区间）──
+  // 参数 from/to/year/month/category/amount_min/amount_max/account_id。
+  app.get('/api/v1/bills/stats/range', { preHandler: requireBoundPerson }, async (req) => {
+    const personId = me(req);
+    const accountId = resolveAccountId(db, personId, num((req.query as Record<string, unknown>).account_id));
+    const q = req.query as Record<string, string | undefined>;
+    const range = {
+      from: q.from,
+      to: q.to,
+      year: q.year !== undefined ? Number(q.year) : undefined,
+      month: q.month !== undefined ? Number(q.month) : undefined,
+      category: q.category,
+      amount_min: q.amount_min !== undefined ? Number(q.amount_min) : undefined,
+      amount_max: q.amount_max !== undefined ? Number(q.amount_max) : undefined,
+    };
+    return billStatsRange(db, accountId, range);
   });
 
   // ── AA 结算 ──

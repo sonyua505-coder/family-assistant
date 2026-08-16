@@ -25,16 +25,17 @@ import { getPerson } from '../system/identity.js';
 import {
   BILL_CATEGORIES,
   billStats,
+  buildBillCsv,
   createBill,
   exportBills,
   getActiveBill,
   getBillAny,
   listBills,
   listTrash,
-  parseParticipants,
   restoreBill,
   settleBill,
   softDeleteBill,
+  yuan,
 } from '../bills/bills.js';
 import { listTokens, mintToken, revokeToken, verifyToken } from './tokens.js';
 import { checkRateLimit, clearFailures, recordFailure } from './ratelimit.js';
@@ -53,11 +54,6 @@ export interface BillsWebRouteDeps {
   apiKey: string;
   config: Config;
   identity: ReturnType<typeof createIdentityHooks>;
-}
-
-/** 分 → 元（整数不带小数）。 */
-function yuan(fen: number): string {
-  return (fen / 100).toFixed(fen % 100 ? 2 : 0);
 }
 
 /** 极小 HTML 转义（错误页用；页面主体走 EJS <%= %>）。 */
@@ -328,7 +324,7 @@ export async function registerBillsWebRoutes(app: FastifyInstance, deps: BillsWe
     const from = q.from && /^\d{4}-\d{2}-\d{2}$/.test(q.from) ? q.from : undefined;
     const to = q.to && /^\d{4}-\d{2}-\d{2}$/.test(q.to) ? q.to : undefined;
     const bills = exportBills(db, account.id, { from, to });
-    const csv = buildCsv(bills);
+    const csv = buildBillCsv(bills);
 
     // filename 含中文需 RFC 5987 编码；加 UTF-8 BOM 让 Excel 正确识别中文
     reply.header('Content-Type', 'text/csv; charset=utf-8');
@@ -439,27 +435,5 @@ export async function registerBillsWebRoutes(app: FastifyInstance, deps: BillsWe
     if (!bill) throw new AppError(404, 'BILL_NOT_FOUND', '账单不存在或已删除');
     resolveAccountId(db, personId, bill.account_id); // 越权 403
     return bill;
-  }
-
-  /** CSV 构建 + 防公式注入（' 前缀清洗 =+-@ 开头单元格）。 */
-  function buildCsv(bills: ReturnType<typeof exportBills>): string {
-    const header = ['日期', '类型', '分类', '金额(元)', '备注', '状态', '参与人'];
-    const rows = bills.map((b) => [
-      b.occurred_at,
-      b.type === 'income' ? '收入' : '支出',
-      b.category,
-      yuan(b.amount),
-      b.note,
-      b.status === 'pending' ? '待结算' : '已结清',
-      parseParticipants(b.participants).map((p) => p.name).join('、'),
-    ]);
-    return [header, ...rows].map((row) => row.map(csvCell).join(',')).join('\r\n');
-  }
-
-  function csvCell(v: string): string {
-    let s = v ?? '';
-    if (/^[=+\-@]/.test(s)) s = `'${s}`; // 防公式注入
-    if (/[",\r\n]/.test(s)) s = `"${s.replace(/"/g, '""')}"`; // 含分隔符/引号/换行则加引号
-    return s;
   }
 }

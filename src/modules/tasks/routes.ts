@@ -60,7 +60,8 @@ export async function registerTasksRoutes(app: FastifyInstance, deps: TasksRoute
     const accountId = resolveAccountId(db, personId, num((req.query as Record<string, unknown>).account_id));
     const q = req.query as Record<string, string | undefined>;
     return listTasks(db, accountId, {
-      is_done: q.is_done === undefined ? undefined : q.is_done === '1' || q.is_done === 'true',
+      // 契约：列表缺省只看未完成（is_done 缺省 false，applied 回显）；export 端点才缺省全部。
+      is_done: q.is_done === undefined ? false : q.is_done === '1' || q.is_done === 'true',
       category: q.category,
       q: q.q,
       from: q.from,

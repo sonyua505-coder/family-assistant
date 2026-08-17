@@ -1,7 +1,7 @@
 # 家庭信息助理 · AstrBot 插件 LLM 工具清单（实测）
 
 > 来源：云端运行态 `/opt/homeassistant/plugins/astrbot_star_homeassistant/main.py`
-> 整理日期：2026-08-15（2026-08-16 同步到 42 个：方向 A 新增 bill_stats / export_bills；方向 B 新增 save_uploaded_file / parse_bills_file / import_bills / delete_file；**2026-08-17 调整为 40 个**：移除记忆域 remember/search_memory/forget，新增待办导出 export_tasks；**2026-08-18 新增 15 个 work_* 工具 → 55 个**：工作账单域）
+> 整理日期：2026-08-15（2026-08-16 同步到 42 个：方向 A 新增 bill_stats / export_bills；方向 B 新增 save_uploaded_file / parse_bills_file / import_bills / delete_file；**2026-08-17 调整为 40 个**：移除记忆域 remember/search_memory/forget，新增待办导出 export_tasks；**2026-08-18 新增 15 个 work_* 工具 → 55 个，随后删除 6 个旧查询工具 → 49 个**：工作账单域 + 移除 list_bills/get_bill/query_bill_stats/query_bill_changes/list_bill_trash/restore_bill（已被 bill_stats/export_bills 等替代，实测无问题））
 > 用途：本地设计文档的权威对照。**新增工具不得与下表重名/同义**；本地要加新工具时，先在文档里追加条目再开发，避免云端部署时撞名。
 
 ## 0. 插件骨架（非工具，但契约相关）
@@ -9,13 +9,13 @@
 | 项 | 实现 |
 |----|------|
 | 插件名 | `astrbot_star_homeassistant`（display: 家庭信息助理） |
-| 配置 | `api_base`（默认 `http://homeassistant-api:3000`）、`api_key`（=X_API_KEY）、`poll_interval`（默认 15s）、`disable_legacy_query_tools`（bool，默认 false，验证新工具期间停用旧查询/统计工具） |
+| 配置 | `api_base`（默认 `http://homeassistant-api:3000`）、`api_key`（=X_API_KEY）、`poll_interval`（默认 15s） |
 | 身份注入 | 插件按入站事件自动加 `x-platform=qq`、`x-openid=发送者openid`，**不是 LLM 参数** |
 | 会话捕获 | `@filter.regex(r".*")` 记录 openid→UMO 映射，供主动推送定位会话 |
 | outbox 主动推送 | 后台轮询 `GET /api/v1/outbox/pending?channel=qq&limit=10` → `context.send_message` → 回执 `POST /api/v1/outbox/{id}/delivery` |
 | 平台 id | 从 UMO 首段推断（qq_official），无命中时按 `{platform}:FriendMessage:{openid}` 构造 C2C 会话 |
 
-## 1. 工具总表（55 个）
+## 1. 工具总表（49 个）
 
 | # | 工具名 | 功能 | 后端端点 |
 |---|--------|------|----------|
@@ -27,53 +27,47 @@
 | 6 | `add_bills` | 批量补录账单 | POST `api/v1/bills/batch` |
 | 7 | `update_bill` | 修改账单 | PATCH `api/v1/bills/{id}` |
 | 8 | `delete_bill` | 删除账单（软删进回收站） | DELETE `api/v1/bills/{id}` |
-| 9 | `list_bill_trash` | 列出回收站账单 | GET `api/v1/bills/trash` |
-| 10 | `restore_bill` | 从回收站恢复账单 | POST `api/v1/bills/{id}/restore` |
-| 11 | `get_bill` | 查询单笔账单完整详情 | GET `api/v1/bills/{id}` |
-| 12 | `settle_bill` | AA 结算 | POST `api/v1/bills/{id}/settle` |
-| 13 | `list_bills` | 列出最近账单 | GET `api/v1/bills` |
-| 14 | `query_bill_stats` | 账单收支统计 | GET `api/v1/bills/stats` |
-| 15 | `query_bill_changes` | 某天账单变动汇总 | GET `api/v1/bills/changes` |
-| 16 | `add_task` | 添加待办 | POST `api/v1/tasks` |
-| 17 | `list_tasks` | 列出待办 | GET `api/v1/tasks` |
-| 18 | `complete_task` | 完成待办 | POST `api/v1/tasks/{id}/done` |
-| 19 | `undo_task` | 改回未完成 | POST `api/v1/tasks/{id}/undo` |
-| 20 | `update_task` | 修改待办 | PATCH `api/v1/tasks/{id}` |
-| 21 | `delete_task` | 删除待办 | DELETE `api/v1/tasks/{id}` |
-| 22 | `subscribe_source` | 订阅信息源 | POST `api/v1/subscriptions` |
-| 23 | `list_subscriptions` | 列出订阅源 | GET `api/v1/subscriptions` |
-| 24 | `unsubscribe` | 退订 | DELETE `api/v1/subscriptions/{id}` |
-| 25 | `query_news` | 查已缓存新闻 | GET `api/v1/news` |
-| 26 | `fetch_source` | 实时抓取信息源 | POST `api/v1/fetch` |
-| 27 | `bind_person` | 绑定已有账号 | POST `api/v1/persons/{id}/bind` |
-| 28 | `join_account` | 加入家庭账本 | POST `api/v1/accounts/{id}/join` |
-| 29 | `unbind_identity` | 解绑平台身份 | DELETE `api/v1/persons/{id}/identities/{platform}/{openid}` |
-| 30 | `set_primary_identity` | 切换主身份 | PATCH `api/v1/persons/me/primary-identity` |
-| 31 | `create_ledger_link` | 生成账本网页链接 | POST `api/v1/web/tokens` |
-| 32 | `list_ledger_links` | 列出已生成账本链接 | GET `api/v1/web/tokens` |
-| 33 | `revoke_ledger_link` | 撤销账本链接 | DELETE `api/v1/web/tokens/{id}` |
-| 34 | `bill_stats` | 收支统计（含图表，chart=true 发统计图） | GET `api/v1/bills/stats/range` |
-| 35 | `export_bills` | 账单明细查询/CSV 导出（text/workspace/user/both） | GET `api/v1/bills/export` |
-| 36 | `save_uploaded_file` | 保存用户发送的文件到会话工作区 | —（无后端，文件落盘工作区） |
-| 37 | `parse_bills_file` | 解析工作区账单文件（xlsx/xls/csv）为结构化明细 | —（读工作区文件） |
-| 38 | `import_bills` | 解析工作区账单文件并批量导入（宽容，坏行跳过） | POST `api/v1/bills/import` |
-| 39 | `delete_file` | 删除工作区文件/目录（不可恢复） | —（无后端） |
-| 40 | `export_tasks` | 待办明细查询/CSV 导出（text/workspace/user/both） | GET `api/v1/tasks/export` |
-| 41 | `add_work_client` | 新建委托方（装修公司/个人） | POST `api/v1/work-clients` |
-| 42 | `list_work_clients` | 列出委托方 | GET `api/v1/work-clients` |
-| 43 | `update_work_client` | 修改委托方 | PATCH `api/v1/work-clients/{id}` |
-| 44 | `delete_work_client` | 删除委托方（有账单不可删） | DELETE `api/v1/work-clients/{id}` |
-| 45 | `set_work_price` | 设置单价（按委托方，upsert） | POST `api/v1/work-unit-prices` |
-| 46 | `list_work_prices` | 列出单价表 | GET `api/v1/work-unit-prices` |
-| 47 | `delete_work_price` | 删除单价记录 | DELETE `api/v1/work-unit-prices/{id}` |
-| 48 | `add_work_bill` | 新建工作账单（明细内嵌，自动带价） | POST `api/v1/work-bills` |
-| 49 | `list_work_bills` | 列出工作账单（宽过滤 + applied 回显） | GET `api/v1/work-bills` |
-| 50 | `get_work_bill` | 查看账单完整明细 + 对账 | GET `api/v1/work-bills/{id}` |
-| 51 | `update_work_bill` | 修改账单（items 全量替换） | PATCH `api/v1/work-bills/{id}` |
-| 52 | `delete_work_bill` | 删除账单（软删） | DELETE `api/v1/work-bills/{id}` |
-| 53 | `settle_work_bill` | 记录一笔结算实收（可多次/部分） | POST `api/v1/work-bills/{id}/settle` |
-| 54 | `recalc_work_bills` | 批量重算未结算单（dry_run 预览/apply） | POST `api/v1/work-bills/recalc` |
-| 55 | `export_work_bills` | 账单查询/CSV 导出（summary/statement） | GET `api/v1/work-bills/export` |
+| 9 | `settle_bill` | AA 结算 | POST `api/v1/bills/{id}/settle` |
+| 10 | `add_task` | 添加待办 | POST `api/v1/tasks` |
+| 11 | `list_tasks` | 列出待办 | GET `api/v1/tasks` |
+| 12 | `complete_task` | 完成待办 | POST `api/v1/tasks/{id}/done` |
+| 13 | `undo_task` | 改回未完成 | POST `api/v1/tasks/{id}/undo` |
+| 14 | `update_task` | 修改待办 | PATCH `api/v1/tasks/{id}` |
+| 15 | `delete_task` | 删除待办 | DELETE `api/v1/tasks/{id}` |
+| 16 | `subscribe_source` | 订阅信息源 | POST `api/v1/subscriptions` |
+| 17 | `list_subscriptions` | 列出订阅源 | GET `api/v1/subscriptions` |
+| 18 | `unsubscribe` | 退订 | DELETE `api/v1/subscriptions/{id}` |
+| 19 | `query_news` | 查已缓存新闻 | GET `api/v1/news` |
+| 20 | `fetch_source` | 实时抓取信息源 | POST `api/v1/fetch` |
+| 21 | `bind_person` | 绑定已有账号 | POST `api/v1/persons/{id}/bind` |
+| 22 | `join_account` | 加入家庭账本 | POST `api/v1/accounts/{id}/join` |
+| 23 | `unbind_identity` | 解绑平台身份 | DELETE `api/v1/persons/{id}/identities/{platform}/{openid}` |
+| 24 | `set_primary_identity` | 切换主身份 | PATCH `api/v1/persons/me/primary-identity` |
+| 25 | `create_ledger_link` | 生成账本网页链接 | POST `api/v1/web/tokens` |
+| 26 | `list_ledger_links` | 列出已生成账本链接 | GET `api/v1/web/tokens` |
+| 27 | `revoke_ledger_link` | 撤销账本链接 | DELETE `api/v1/web/tokens/{id}` |
+| 28 | `bill_stats` | 收支统计（含图表，chart=true 发统计图） | GET `api/v1/bills/stats/range` |
+| 29 | `export_bills` | 账单明细查询/CSV 导出（text/workspace/user/both） | GET `api/v1/bills/export` |
+| 30 | `save_uploaded_file` | 保存用户发送的文件到会话工作区 | —（无后端，文件落盘工作区） |
+| 31 | `parse_bills_file` | 解析工作区账单文件（xlsx/xls/csv）为结构化明细 | —（读工作区文件） |
+| 32 | `import_bills` | 解析工作区账单文件并批量导入（宽容，坏行跳过） | POST `api/v1/bills/import` |
+| 33 | `delete_file` | 删除工作区文件/目录（不可恢复） | —（无后端） |
+| 34 | `export_tasks` | 待办明细查询/CSV 导出（text/workspace/user/both） | GET `api/v1/tasks/export` |
+| 35 | `add_work_client` | 新建委托方（装修公司/个人） | POST `api/v1/work-clients` |
+| 36 | `list_work_clients` | 列出委托方 | GET `api/v1/work-clients` |
+| 37 | `update_work_client` | 修改委托方 | PATCH `api/v1/work-clients/{id}` |
+| 38 | `delete_work_client` | 删除委托方（有账单不可删） | DELETE `api/v1/work-clients/{id}` |
+| 39 | `set_work_price` | 设置单价（按委托方，upsert） | POST `api/v1/work-unit-prices` |
+| 40 | `list_work_prices` | 列出单价表 | GET `api/v1/work-unit-prices` |
+| 41 | `delete_work_price` | 删除单价记录 | DELETE `api/v1/work-unit-prices/{id}` |
+| 42 | `add_work_bill` | 新建工作账单（明细内嵌，自动带价） | POST `api/v1/work-bills` |
+| 43 | `list_work_bills` | 列出工作账单（宽过滤 + applied 回显） | GET `api/v1/work-bills` |
+| 44 | `get_work_bill` | 查看账单完整明细 + 对账 | GET `api/v1/work-bills/{id}` |
+| 45 | `update_work_bill` | 修改账单（items 全量替换） | PATCH `api/v1/work-bills/{id}` |
+| 46 | `delete_work_bill` | 删除账单（软删） | DELETE `api/v1/work-bills/{id}` |
+| 47 | `settle_work_bill` | 记录一笔结算实收（可多次/部分） | POST `api/v1/work-bills/{id}/settle` |
+| 48 | `recalc_work_bills` | 批量重算未结算单（dry_run 预览/apply） | POST `api/v1/work-bills/recalc` |
+| 49 | `export_work_bills` | 账单查询/CSV 导出（summary/statement） | GET `api/v1/work-bills/export` |
 
 ## 2. 各工具 LLM 参数签名
 
@@ -95,14 +89,8 @@
 - `add_bill(type: str, amount: float, category?: str, note?: str, participants?: list, account_id?: int)` — type ∈ {income, expense}
 - `add_bills(bills: list, account_id?: int)` — bills 元素 {type, amount, category?, note?, occurred_at?, participants?}
 - `update_bill(bill_id: int, type?: str, amount?: float, category?: str, note?: str, participants?: list, occurred_at?: str)` — occurred_at 格式 YYYY-MM-DD 或 YYYY-MM-DD HH:MM:SS（2026-08-17 补，修正导入的日期错误）
-- `delete_bill(bill_id: int)` — 软删；回复指引可 `list_bill_trash`/`restore_bill` 反悔
-- `list_bill_trash(account_id?: int)` — 回收站列表
-- `restore_bill(bill_id: int)` — 从回收站恢复
-- `get_bill(bill_id: int)` — 单笔完整详情（参与人/备注/发生时间/状态）
+- `delete_bill(bill_id: int)` — 软删进回收站；回收站查看/恢复走记账网页「回收站」页（旧 list_bill_trash/restore_bill 工具已删除）
 - `settle_bill(bill_id: int, participant_name?: str, all?: bool)`
-- `list_bills(account_id?: int, month?: str)` — month 格式 YYYY-MM（旧工具，可被 `export_bills` 替代）
-- `query_bill_stats(year?: int, month?: int, account_id?: int)` — 旧工具，指向旧 `GET /bills/stats`；新统计用 `bill_stats`
-- `query_bill_changes(date?: str)` — date 格式 YYYY-MM-DD
 - `bill_stats(year?: int, month?: int, from_date?: str, to_date?: str, category?: str, amount_min?: int, amount_max?: int, account_id?: int, chart?: bool=True)` — 区间统计（`from_date/to_date` 优先于 `year/month`；金额单位「分」；`chart=True` 时 matplotlib 渲染「支出构成+收支趋势」PNG 并发送，金额展示为「元」）；后端 `GET /api/v1/bills/stats/range`
 - `export_bills(type?: str, category?: str, status?: str, participant?: str, month?: str, year?: int, from_date?: str, to_date?: str, amount_min?: int, amount_max?: int, account_id?: int, destination?: str="text", relative_path?: str, limit?: int=20)` — destination ∈ {text, workspace, user, both}；text 走 json 明细（**每行带 `#id`**，供 update_bill/delete_bill 定位；limit 上限 50），文件导出走 csv（workspace 存当前会话工作区按 `relative_path` 或自动命名，user 直接发 CSV 文件，both 两者）；后端 `GET /api/v1/bills/export`
 
@@ -157,18 +145,18 @@
 1. **金额单位是「分」**：`amount` 工具层强制 `int(amount)`，1 元 = 100 分。所有返回里的金额也带「分」字。
 2. **AA 分摊**：`add_bill` 带 `participants`（名字数组）→ 账单 `status=pending` → `settle_bill` 结算。用户说「AA/平摊/垫付」时要先问清参与者再传。
 3. **多账本歧义**：用户有多个账本时，记账/查账/待办必须传 `account_id`，否则后端返回 ACCOUNT_AMBIGUOUS，由 LLM 引导指定。
-4. **软删除闭环**：`delete_bill` 进回收站；`list_bill_trash` 查看、`restore_bill` 恢复（2026-08-15 补齐）。
+4. **软删除闭环**：`delete_bill` 软删进回收站；回收站查看/恢复走记账网页「回收站」页（LLM 侧旧 list_bill_trash/restore_bill 工具已于 2026-08-18 删除，替代工具实测无问题）。
 5. **日期格式**：`month`=YYYY-MM、`date`=YYYY-MM-DD、`remind_at`=YYYY-MM-DD HH:MM。
 6. **source_type 因工具而异**：`subscribe_source` 只收 rss|preset；`fetch_source` 收 rss|url|preset。
 7. **身份不在 LLM 参数里**：x-platform/x-openid 由插件注入，LLM 猜不到也传不了——本地设计文档不要设计「让 LLM 传身份」的工具。
 8. **`get_my_identity` 未登记时返回引导语**，引导链：create_person → create_account → add_bill。
 9. **新查询/统计工具（方向 A，2026-08-16 云端上线）**：`export_bills`/`bill_stats` 对接 `/bills/export` 与 `/bills/stats/range`；金额过滤单位「分」；后端回显 `applied`（实际生效筛选），工具回复带「已生效筛选」供 LLM 自验证；`bill_stats` 图表由插件 matplotlib 渲染 PNG 直接发送。
-10. **旧工具可整体停用**：配置 `disable_legacy_query_tools=true` 时停用 list_bills/get_bill/query_bill_stats/query_bill_changes/list_bill_trash/restore_bill（`context.deactivate_llm_tool`，持久化到 shared_preferences）。
+10. **旧查询/统计工具已删除（2026-08-18）**：list_bills/get_bill/query_bill_stats/query_bill_changes/list_bill_trash/restore_bill 六工具与其 `disable_legacy_query_tools` 停用机制一并移除（替代工具 bill_stats/export_bills 实测通过）。**后端端点 `/bills/trash`、`/bills/{id}/restore`、`/bills/changes`、`/bills/stats` 仍保留**，仅插件不再暴露为 LLM 工具。
 11. **文件导入（方向 B，2026-08-16 云端上线）**：`save_uploaded_file` → `parse_bills_file`（预览确认）→ `import_bills`（宽容入库）→ `delete_file`（清理）。文件金额默认「元」，插件解析时换算为「分」（区别于 LLM 工具参数约定——文件解析是插件职责，不做整批 400，坏行在 `failures` 里反馈 LLM 自修正）。工作区文件路径一律相对路径，插件 `resolve + is_relative_to` 校验防逃逸。
 
 ## 4. 新工具开发约定（写进本地文档）
 
-- 新增工具**先确认不与上表 55 个重名**（含语义相同仅改名的，如已有 `add_bill` 就别再写 `record_bill`/`log_expense`）。
+- 新增工具**先确认不与上表 49 个重名**（含语义相同仅改名的，如已有 `add_bill` 就别再写 `record_bill`/`log_expense`）。
 - 每个工具 = `@filter.llm_tool(name="...")` + async 方法 + **带 Args 的 docstring**（AstrBot 用 docstring 生成 LLM 工具描述，参数名/类型/单位/枚举都要写清楚）。
 - 走 `self._api(method, path, identity=self._identity(event), json_body=...)`，统一错误返回为失败字典。
 - 工具描述里写明行为约定（如 add_bill 的 AA 规则、participants 格式），LLM 靠描述触发正确调用。

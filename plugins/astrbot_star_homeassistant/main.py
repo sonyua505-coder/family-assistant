@@ -7,8 +7,7 @@
     x-openid=消息发送者 openid，见 src/lib/identity.ts）。
   - 账本：create_account / list_my_accounts / join_account。
   - 记账：add_bill / add_bills(批量) / update_bill / delete_bill / settle_bill /
-    list_bills / get_bill / list_bill_trash / restore_bill / query_bill_stats /
-    query_bill_changes（含 AA 分摊）。
+    bill_stats(统计图) / export_bills(查询/导出)（含 AA 分摊）。
   - 待办：add_task / list_tasks / complete_task / undo_task / update_task / delete_task。
   - 工作账单（装修安装门，2026-08-18）：add_work_client / set_work_price / add_work_bill /
     list_work_bills / get_work_bill / settle_work_bill / recalc_work_bills / export_work_bills 等。
@@ -66,47 +65,15 @@ class HomeAssistantStar(Star):
         self._platform_id: str | None = None
         self._outbox_task: asyncio.Task | None = None
 
-    # 新 bill_stats / export_bills 上线后，验证期间按配置停用的旧查询/统计工具
-    LEGACY_QUERY_TOOLS = [
-        "list_bills",
-        "get_bill",
-        "query_bill_stats",
-        "query_bill_changes",
-        "list_bill_trash",
-        "restore_bill",
-    ]
-
     # ────────────────────────── 生命周期 ──────────────────────────
 
     async def initialize(self) -> None:
-        """插件激活时按配置调整旧工具启停，并启动 outbox 轮询。"""
-        self._apply_legacy_tool_policy()
+        """插件激活时启动 outbox 轮询。"""
         self._outbox_task = asyncio.create_task(self._outbox_loop())
         logger.info(
             f"[HomeAssistant] 插件已激活 api_base={self.api_base} "
             f"poll_interval={self.poll_interval}s"
         )
-
-    def _apply_legacy_tool_policy(self) -> None:
-        """按 disable_legacy_query_tools 配置停用/启用旧查询统计工具。
-
-        deactivate/activate_llm_tool 均幂等：停用状态持久化到
-        shared_preferences 的 inactivated_llm_tools，重启自动恢复。
-        """
-        disable = bool(self.config.get("disable_legacy_query_tools", False))
-        action = "停用" if disable else "启用"
-        for name in self.LEGACY_QUERY_TOOLS:
-            try:
-                ok = (
-                    self.context.deactivate_llm_tool(name)
-                    if disable
-                    else self.context.activate_llm_tool(name)
-                )
-                logger.info(f"[HomeAssistant] {action}旧查询工具 {name}: ok={ok}")
-            except ValueError as e:  # activate 在所属插件被禁用时会抛
-                logger.warning(f"[HomeAssistant] 调整工具 {name} 被拒绝: {e}")
-            except Exception as e:
-                logger.warning(f"[HomeAssistant] 调整工具 {name} 失败: {e}")
 
     async def terminate(self) -> None:
         if self._outbox_task:
@@ -509,51 +476,7 @@ class HomeAssistantStar(Star):
         )
         if not data.get("ok", True):
             return f"删除失败：{data.get('body') or data.get('error') or data}"
-        return f"已删除账单#{bill_id}（进了回收站，可 list_bill_trash 查看、restore_bill 恢复）。"
-
-    @filter.llm_tool(name="list_bill_trash")
-    async def list_bill_trash(self, event: AstrMessageEvent, account_id: int = None) -> str:
-        """列出回收站里的账单（软删除、尚未恢复的）。
-
-        Args:
-            account_id(number): 记账账户 id（用户有多个账本时必须指定）。
-        """
-        qs = f"?account_id={account_id}" if account_id else ""
-        data = await self._api(
-            "GET", f"api/v1/bills/trash{qs}", identity=self._identity(event),
-        )
-        if not data.get("ok", True):
-            return f"查询失败：{data.get('body') or data.get('error') or data}"
-        items = data.get("items") or []
-        if not items:
-            return "回收站是空的。"
-        lines = []
-        for it in items[:10]:
-            kind = "支出" if it.get("type") == "expense" else "收入"
-            lines.append(
-                f"#{it.get('id')} {kind} {it.get('amount')}分 "
-                f"{it.get('category') or ''} {it.get('note') or ''}"
-            )
-        return "回收站账单（可用 restore_bill 恢复）：\n" + "\n".join(lines)
-
-    @filter.llm_tool(name="restore_bill")
-    async def restore_bill(self, event: AstrMessageEvent, bill_id: int) -> str:
-        """从回收站恢复一笔已删除的账单（软删除可反悔）。
-
-        Args:
-            bill_id(number): 账单 id（来自 delete_bill 的 #id 或回收站列表）。
-        """
-        data = await self._api(
-            "POST", f"api/v1/bills/{bill_id}/restore", identity=self._identity(event),
-        )
-        if not data.get("ok", True):
-            return f"恢复失败：{data.get('body') or data.get('error') or data}"
-        b = data.get("bill") or {}
-        kind = "支出" if b.get("type") == "expense" else "收入"
-        return (
-            f"已恢复账单#{b.get('id')}：{kind} {b.get('amount')}分 "
-            f"（{b.get('category') or '未分类'}）"
-        )
+        return f"已删除账单#{bill_id}（软删除；回收站查看/恢复请在记账网页「回收站」页操作）。"
 
     @staticmethod
     def _normalize_participants(participants: list) -> list:
@@ -565,99 +488,6 @@ class HomeAssistantStar(Star):
             elif isinstance(p, dict) and p.get("name"):
                 out.append({"name": p["name"]})
         return out
-
-    @filter.llm_tool(name="list_bills")
-    async def list_bills(
-        self,
-        event: AstrMessageEvent,
-        account_id: int = None,
-        month: str = None,
-    ) -> str:
-        """列出用户最近的账单。
-
-        Args:
-            account_id(number): 记账账户 id（用户有多个账本时必须指定）。
-            month(string): 月份筛选，格式 YYYY-MM（可选）。
-        """
-        params = {}
-        if account_id:
-            params["account_id"] = account_id
-        if month:
-            params["month"] = month
-        qs = "&".join(f"{k}={v}" for k, v in params.items())
-        data = await self._api(
-            "GET", f"api/v1/bills?{qs}", identity=self._identity(event),
-        )
-        if not data.get("ok", True):
-            return f"查询失败：{data.get('body') or data.get('error') or data}"
-        items = data.get("items") or []
-        if not items:
-            return "暂无账单。"
-        lines = []
-        for it in items[:10]:
-            kind = "支出" if it.get("type") == "expense" else "收入"
-            lines.append(
-                f"#{it.get('id')} {it.get('occurred_at', '')} {kind} {it.get('amount')}分 "
-                f"{it.get('category') or ''} {it.get('note') or ''}"
-            )
-        return "最近账单：\n" + "\n".join(lines)
-
-    @filter.llm_tool(name="get_bill")
-    async def get_bill(self, event: AstrMessageEvent, bill_id: int) -> str:
-        """查询一笔账单的完整详情（含参与人、备注、发生时间）。
-
-        Args:
-            bill_id(number): 账单 id（来自记账或查账结果的 #id）。
-        """
-        data = await self._api(
-            "GET", f"api/v1/bills/{bill_id}", identity=self._identity(event),
-        )
-        if not data.get("ok", True):
-            return f"查询失败：{data.get('body') or data.get('error') or data}"
-        parts = [f"#{data.get('id')}"]
-        kind = "支出" if data.get("type") == "expense" else "收入"
-        parts.append(f"{kind} {data.get('amount')}分")
-        if data.get("category"):
-            parts.append(f"分类:{data.get('category')}")
-        if data.get("note"):
-            parts.append(f"备注:{data.get('note')}")
-        if data.get("occurred_at"):
-            parts.append(f"时间:{data.get('occurred_at')}")
-        if data.get("participants"):
-            parts.append(f"参与人:{data.get('participants')}")
-        if data.get("status"):
-            parts.append(f"状态:{data.get('status')}")
-        return "账单详情：" + "，".join(parts)
-
-    @filter.llm_tool(name="query_bill_stats")
-    async def query_bill_stats(
-        self,
-        event: AstrMessageEvent,
-        year: int = None,
-        month: int = None,
-        account_id: int = None,
-    ) -> str:
-        """查询账单统计汇总（支出/收入）。
-
-        Args:
-            year(number): 年份，如 2026（可选）。
-            month(number): 月份 1-12（可选）。
-            account_id(number): 记账账户 id（用户有多个账本时必须指定）。
-        """
-        params = {}
-        if year:
-            params["year"] = year
-        if month:
-            params["month"] = month
-        if account_id:
-            params["account_id"] = account_id
-        qs = "&".join(f"{k}={v}" for k, v in params.items())
-        data = await self._api(
-            "GET", f"api/v1/bills/stats?{qs}", identity=self._identity(event),
-        )
-        if not data.get("ok", True):
-            return f"查询失败：{data.get('body') or data.get('error') or data}"
-        return f"账单统计：{data}"
 
     # ────────────────────────── 批量/变动 ──────────────────────────
 
@@ -696,21 +526,6 @@ class HomeAssistantStar(Star):
         if not data.get("ok", True):
             return f"批量录入失败：{data.get('body') or data.get('error') or data}"
         return f"已批量录入 {data.get('count')} 笔，ids={data.get('bill_ids')}"
-
-    @filter.llm_tool(name="query_bill_changes")
-    async def query_bill_changes(self, event: AstrMessageEvent, date: str = None) -> str:
-        """查询某天的账单变动汇总（新增/修改/删除/恢复/AA结算）。
-
-        Args:
-            date(string): 日期 YYYY-MM-DD，默认今天（可选）。
-        """
-        qs = f"?date={date}" if date else ""
-        data = await self._api(
-            "GET", f"api/v1/bills/changes{qs}", identity=self._identity(event),
-        )
-        if not data.get("ok", True):
-            return f"查询失败：{data.get('body') or data.get('error') or data}"
-        return f"账单变动：{data}"
 
     # ────────────────────────── 待办事项 ──────────────────────────
 

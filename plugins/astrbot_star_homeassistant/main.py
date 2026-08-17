@@ -11,7 +11,6 @@
     query_bill_changes（含 AA 分摊）。
   - 待办：add_task / list_tasks / complete_task / undo_task / update_task / delete_task。
   - 订阅/新闻：subscribe_source / list_subscriptions / unsubscribe / query_news。
-  - 记忆：remember / search_memory / forget。
   - 抓取：fetch_source（SSRF 白名单由后端把关）。
   - 账本链接：create_ledger_link / list_ledger_links / revoke_ledger_link。
   - outbox：后台轮询 /api/v1/outbox/pending?channel=qq，经
@@ -750,17 +749,41 @@ class HomeAssistantStar(Star):
         self,
         event: AstrMessageEvent,
         is_done: bool = None,
+        q: str = None,
+        category: str = None,
+        from_date: str = None,
+        to_date: str = None,
+        page: int = None,
+        page_size: int = None,
         account_id: int = None,
     ) -> str:
-        """列出家庭待办事项。
+        """列出家庭待办事项，支持关键词/分类/日期区间/分页。默认只看未完成（需看全部请传 is_done）。
 
         Args:
-            is_done(boolean): 是否只显示已完成（可选，默认未完成）。
-            account_id(number): 归属账户 id（可选）。
+            is_done(boolean): 状态筛选，true=已完成，false=未完成；不传则默认只看未完成（可选）。
+            q(string): 内容关键词，空格分隔多个词须全部命中（可选）。
+            category(string): 分类筛选，如 购物（可选）。
+            from_date(string): 起始创建日期 YYYY-MM-DD（可选）。
+            to_date(string): 结束创建日期 YYYY-MM-DD（可选）。
+            page(number): 页码，从 1 开始（可选）。
+            page_size(number): 每页条数，默认 50，最大 200（可选）。
+            account_id(number): 归属账户 id（有多个账本时必须指定）。
         """
         params = {}
         if is_done is not None:
             params["is_done"] = "1" if is_done else "0"
+        if q:
+            params["q"] = q
+        if category:
+            params["category"] = category
+        if from_date:
+            params["from"] = from_date
+        if to_date:
+            params["to"] = to_date
+        if page:
+            params["page"] = page
+        if page_size:
+            params["page_size"] = page_size
         if account_id:
             params["account_id"] = account_id
         qs = "&".join(f"{k}={v}" for k, v in params.items())
@@ -768,16 +791,22 @@ class HomeAssistantStar(Star):
             "GET", f"api/v1/tasks?{qs}", identity=self._identity(event),
         )
         if not data.get("ok", True):
-            return f"查询失败：{data.get('body') or data.get('error') or data}"
+            return self._err_msg(data)
         items = data.get("items") or []
+        total = data.get("total") or len(items)
+        applied = data.get("applied") or {}
         if not items:
-            return "暂无待办事项。"
-        lines = []
-        for it in items[:15]:
+            return "没有符合条件的待办。" + (f"\n已生效筛选：{applied}" if applied else "")
+        lines = [f"共 {total} 条待办（显示前 {len(items)} 条）："]
+        for it in items[:20]:
             done = "✅" if it.get("is_done") else "⬜"
             remind = f" 提醒:{it.get('remind_at')}" if it.get("remind_at") else ""
             lines.append(f"{done} #{it.get('id')} {it.get('content')}{remind}")
-        return "待办事项：\n" + "\n".join(lines)
+        if total > len(items):
+            lines.append(f"\n…还有 {total - len(items)} 条未显示，可缩小条件或用 export_tasks 导出。")
+        if applied:
+            lines.append(f"已生效筛选：{applied}")
+        return "\n".join(lines)
 
     @filter.llm_tool(name="complete_task")
     async def complete_task(self, event: AstrMessageEvent, task_id: int) -> str:
@@ -851,6 +880,153 @@ class HomeAssistantStar(Star):
         if not data.get("ok", True):
             return f"删除失败：{data.get('body') or data.get('error') or data}"
         return f"已删除事项#{task_id}。"
+
+    @filter.llm_tool(name="export_tasks")
+    async def export_tasks(
+        self,
+        event: AstrMessageEvent,
+        is_done: bool = None,
+        q: str = None,
+        category: str = None,
+        from_date: str = None,
+        to_date: str = None,
+        account_id: int = None,
+        destination: str = "text",
+        relative_path: str = None,
+        limit: int = 20,
+    ) -> str:
+        """查询待办明细（默认）或导出为 CSV 文件。默认导出全部状态（需过滤请传 is_done）；q 空格分隔多个词须全部命中。纯查询模式返回明细文本供你直接回答，结果过长时只显示前 limit 条并提示导出；destination 可选 workspace（存当前会话工作区）/ user（直接发 CSV 文件）/ both。
+
+        Args:
+            is_done(boolean): 状态筛选，true=已完成，false=未完成；不传则导出全部（可选）。
+            q(string): 内容关键词，空格分隔多个词须全部命中（可选）。
+            category(string): 分类筛选，如 购物（可选）。
+            from_date(string): 起始创建日期 YYYY-MM-DD（可选）。
+            to_date(string): 结束创建日期 YYYY-MM-DD（可选）。
+            account_id(number): 归属账户 id（有多个账本时必须指定）。
+            destination(string): text=纯查询返回明细文本（默认）；workspace=只存会话工作区；user=直接把 CSV 文件发给你；both=既存工作区又发文件。
+            relative_path(string): destination 为 workspace/both 时，工作区内的相对路径，如 exports/待办清单.csv（可选，默认自动命名）。
+            limit(number): 纯查询模式下最多返回的明细条数，默认 20，最大 50（可选）。
+        """
+        filters = {}
+        if is_done is not None:
+            filters["is_done"] = "1" if is_done else "0"
+        if q:
+            filters["q"] = q
+        if category:
+            filters["category"] = category
+        if from_date:
+            filters["from"] = from_date
+        if to_date:
+            filters["to"] = to_date
+        if account_id:
+            filters["account_id"] = account_id
+
+        # ── 纯查询模式（默认）：返回明细文本给 BOT，不进 LLM 上下文超长风险 ──
+        if destination == "text":
+            qs = urlencode(filters)
+            data = await self._api(
+                "GET", f"api/v1/tasks/export?{qs}", identity=self._identity(event)
+            )
+            if not data.get("ok", True):
+                return self._err_msg(data)
+            items = data.get("items") or []
+            total = data.get("total") or len(items)
+            applied = data.get("applied") or {}
+            if not items:
+                return "没有符合条件的待办。" + (f"\n已生效筛选：{applied}" if applied else "")
+            try:
+                cap = max(1, min(int(limit) if limit else 20, 50))
+            except (TypeError, ValueError):
+                cap = 20
+            shown = items[:cap]
+            lines = [f"共 {total} 条待办（显示前 {len(shown)} 条）："]
+            for t in shown:
+                done = "✅" if t.get("is_done") else "⬜"
+                line = f"- #{t.get('id', '?')} {done} {t.get('content', '')}"
+                if t.get("category"):
+                    line += f" 分类:{t.get('category')}"
+                if t.get("remind_at"):
+                    line += f" 提醒:{t.get('remind_at')}"
+                lines.append(line)
+            if total > len(shown):
+                lines.append(
+                    f"\n…还有 {total - len(shown)} 条未显示。"
+                    f"可用 destination=user 把 CSV 文件发给你，或 destination=workspace 存工作区。"
+                )
+            if applied:
+                lines.append(f"已生效筛选：{applied}")
+            return "\n".join(lines)
+
+        # ── 文件导出模式（workspace / user / both）：走 CSV ──
+        params = dict(filters)
+        params["format"] = "csv"
+        qs = urlencode(params)
+
+        ret = await self._api_raw(
+            "GET", f"api/v1/tasks/export?{qs}", identity=self._identity(event)
+        )
+        if isinstance(ret, dict):
+            return self._err_msg(ret)
+        http_status, csv_text = ret
+        if http_status >= 400:
+            return f"导出失败（HTTP {http_status}）：{csv_text[:300]}"
+        if not isinstance(csv_text, str) or not csv_text.strip():
+            return "导出失败：后端返回空内容。"
+        try:
+            # 用 csv.reader 精确统计行数（正确处理带引号换行的字段），不进 LLM 上下文
+            row_count = max(0, sum(1 for _ in csv.reader(io.StringIO(csv_text))) - 1)
+        except Exception:
+            row_count = 0
+
+        ws_path = None
+        if destination in ("workspace", "both"):
+            try:
+                if relative_path:
+                    target = self._resolve_workspace_rel(event, relative_path)
+                else:
+                    target = (
+                        self._workspace_root(event)
+                        / "exports"
+                        / f"tasks_{datetime.now():%Y%m%d_%H%M%S}.csv"
+                    )
+                target.parent.mkdir(parents=True, exist_ok=True)
+                with open(target, "w", encoding="utf-8", newline="") as f:
+                    f.write(csv_text)  # csv_text 自带 UTF-8 BOM
+                ws_path = target.relative_to(self._workspace_root(event)).as_posix()
+            except ValueError as e:
+                return f"无效路径：{e}"
+
+        if destination in ("user", "both"):
+            filename = (
+                os.path.basename(ws_path)
+                if ws_path
+                else f"tasks_{datetime.now():%Y%m%d_%H%M%S}.csv"
+            )
+            tmp = os.path.join(get_astrbot_temp_path(), f"ha_export_{uuid.uuid4().hex}.csv")
+            with open(tmp, "w", encoding="utf-8", newline="") as f:
+                f.write(csv_text)
+            try:
+                ok = await self.context.send_message(
+                    event.unified_msg_origin,
+                    MessageChain([File(name=filename, file=tmp)]),
+                )
+                if not ok:
+                    return f"文件已生成但发送失败（未匹配到平台）。工作区副本：{ws_path or filename}"
+            finally:
+                if os.path.exists(tmp):
+                    os.remove(tmp)
+
+        applied_note = f"筛选：{dict(params)}"
+        if destination == "workspace":
+            return (
+                f"已导出 {row_count} 条待办到工作区：{ws_path}。\n"
+                f"{applied_note}\n"
+                f"可用文件工具读取/处理，或让我把它发给你。"
+            )
+        if destination == "user":
+            return f"已把 {row_count} 条待办的 CSV 文件发给你。\n{applied_note}"
+        return f"已导出 {row_count} 条待办到工作区：{ws_path}，并已把文件发给你。\n{applied_note}"
 
     # ────────────────────────── 订阅与新闻 ──────────────────────────
 
@@ -948,59 +1124,6 @@ class HomeAssistantStar(Star):
         for it in items[:limit or 10]:
             lines.append(f"- {it.get('title') or it.get('summary') or '(无标题)'}")
         return "新闻：\n" + "\n".join(lines)
-
-    # ────────────────────────── 记忆 ──────────────────────────
-
-    @filter.llm_tool(name="remember")
-    async def remember(self, event: AstrMessageEvent, content: str, category: str = None) -> str:
-        """记住一条关于用户的零散记忆（如喜好、WiFi、习惯等）。
-
-        Args:
-            content(string): 要记住的内容。
-            category(string): 分类（可选）。
-        """
-        body = {"content": content}
-        if category:
-            body["category"] = category
-        data = await self._api(
-            "POST", "api/v1/memories", identity=self._identity(event), json_body=body,
-        )
-        if not data.get("ok", True):
-            return f"记住失败：{data.get('body') or data.get('error') or data}"
-        return f"已记住#{data.get('id')}：{content}"
-
-    @filter.llm_tool(name="search_memory")
-    async def search_memory(self, event: AstrMessageEvent, q: str = None) -> str:
-        """检索关于用户的记忆。
-
-        Args:
-            q(string): 关键词（可选，空则列最近记忆）。
-        """
-        qs = f"?q={q}" if q else ""
-        data = await self._api(
-            "GET", f"api/v1/memories{qs}", identity=self._identity(event),
-        )
-        if not data.get("ok", True):
-            return f"检索失败：{data.get('body') or data.get('error') or data}"
-        items = data.get("items") or []
-        if not items:
-            return "没有找到相关记忆。"
-        lines = [f"#{it.get('id')} {it.get('content')}" for it in items[:10]]
-        return "记忆：\n" + "\n".join(lines)
-
-    @filter.llm_tool(name="forget")
-    async def forget(self, event: AstrMessageEvent, memory_id: int) -> str:
-        """删除一条记忆。
-
-        Args:
-            memory_id(number): 记忆 id。
-        """
-        data = await self._api(
-            "DELETE", f"api/v1/memories/{memory_id}", identity=self._identity(event),
-        )
-        if not data.get("ok", True):
-            return f"删除失败：{data.get('body') or data.get('error') or data}"
-        return f"已删除记忆#{memory_id}。"
 
     # ────────────────────────── 实时抓取 ──────────────────────────
 

@@ -1,7 +1,7 @@
 # 家庭信息助理 · AstrBot 插件 LLM 工具清单（实测）
 
 > 来源：云端运行态 `/opt/homeassistant/plugins/astrbot_star_homeassistant/main.py`
-> 整理日期：2026-08-15（2026-08-16 同步到 42 个：方向 A 新增 bill_stats / export_bills；方向 B 新增 save_uploaded_file / parse_bills_file / import_bills / delete_file）
+> 整理日期：2026-08-15（2026-08-16 同步到 42 个：方向 A 新增 bill_stats / export_bills；方向 B 新增 save_uploaded_file / parse_bills_file / import_bills / delete_file；**2026-08-17 调整为 40 个**：移除记忆域 remember/search_memory/forget 三个工具，新增待办导出 export_tasks）
 > 用途：本地设计文档的权威对照。**新增工具不得与下表重名/同义**；本地要加新工具时，先在文档里追加条目再开发，避免云端部署时撞名。
 
 ## 0. 插件骨架（非工具，但契约相关）
@@ -15,7 +15,7 @@
 | outbox 主动推送 | 后台轮询 `GET /api/v1/outbox/pending?channel=qq&limit=10` → `context.send_message` → 回执 `POST /api/v1/outbox/{id}/delivery` |
 | 平台 id | 从 UMO 首段推断（qq_official），无命中时按 `{platform}:FriendMessage:{openid}` 构造 C2C 会话 |
 
-## 1. 工具总表（42 个）
+## 1. 工具总表（40 个）
 
 | # | 工具名 | 功能 | 后端端点 |
 |---|--------|------|----------|
@@ -44,23 +44,21 @@
 | 23 | `list_subscriptions` | 列出订阅源 | GET `api/v1/subscriptions` |
 | 24 | `unsubscribe` | 退订 | DELETE `api/v1/subscriptions/{id}` |
 | 25 | `query_news` | 查已缓存新闻 | GET `api/v1/news` |
-| 26 | `remember` | 记住用户记忆 | POST `api/v1/memories` |
-| 27 | `search_memory` | 检索记忆 | GET `api/v1/memories` |
-| 28 | `forget` | 删除记忆 | DELETE `api/v1/memories/{id}` |
-| 29 | `fetch_source` | 实时抓取信息源 | POST `api/v1/fetch` |
-| 30 | `bind_person` | 绑定已有账号 | POST `api/v1/persons/{id}/bind` |
-| 31 | `join_account` | 加入家庭账本 | POST `api/v1/accounts/{id}/join` |
-| 32 | `unbind_identity` | 解绑平台身份 | DELETE `api/v1/persons/{id}/identities/{platform}/{openid}` |
-| 33 | `set_primary_identity` | 切换主身份 | PATCH `api/v1/persons/me/primary-identity` |
-| 34 | `create_ledger_link` | 生成账本网页链接 | POST `api/v1/web/tokens` |
-| 35 | `list_ledger_links` | 列出已生成账本链接 | GET `api/v1/web/tokens` |
-| 36 | `revoke_ledger_link` | 撤销账本链接 | DELETE `api/v1/web/tokens/{id}` |
-| 37 | `bill_stats` | 收支统计（含图表，chart=true 发统计图） | GET `api/v1/bills/stats/range` |
-| 38 | `export_bills` | 账单明细查询/CSV 导出（text/workspace/user/both） | GET `api/v1/bills/export` |
-| 39 | `save_uploaded_file` | 保存用户发送的文件到会话工作区 | —（无后端，文件落盘工作区） |
-| 40 | `parse_bills_file` | 解析工作区账单文件（xlsx/xls/csv）为结构化明细 | —（读工作区文件） |
-| 41 | `import_bills` | 解析工作区账单文件并批量导入（宽容，坏行跳过） | POST `api/v1/bills/import` |
-| 42 | `delete_file` | 删除工作区文件/目录（不可恢复） | —（无后端） |
+| 26 | `fetch_source` | 实时抓取信息源 | POST `api/v1/fetch` |
+| 27 | `bind_person` | 绑定已有账号 | POST `api/v1/persons/{id}/bind` |
+| 28 | `join_account` | 加入家庭账本 | POST `api/v1/accounts/{id}/join` |
+| 29 | `unbind_identity` | 解绑平台身份 | DELETE `api/v1/persons/{id}/identities/{platform}/{openid}` |
+| 30 | `set_primary_identity` | 切换主身份 | PATCH `api/v1/persons/me/primary-identity` |
+| 31 | `create_ledger_link` | 生成账本网页链接 | POST `api/v1/web/tokens` |
+| 32 | `list_ledger_links` | 列出已生成账本链接 | GET `api/v1/web/tokens` |
+| 33 | `revoke_ledger_link` | 撤销账本链接 | DELETE `api/v1/web/tokens/{id}` |
+| 34 | `bill_stats` | 收支统计（含图表，chart=true 发统计图） | GET `api/v1/bills/stats/range` |
+| 35 | `export_bills` | 账单明细查询/CSV 导出（text/workspace/user/both） | GET `api/v1/bills/export` |
+| 36 | `save_uploaded_file` | 保存用户发送的文件到会话工作区 | —（无后端，文件落盘工作区） |
+| 37 | `parse_bills_file` | 解析工作区账单文件（xlsx/xls/csv）为结构化明细 | —（读工作区文件） |
+| 38 | `import_bills` | 解析工作区账单文件并批量导入（宽容，坏行跳过） | POST `api/v1/bills/import` |
+| 39 | `delete_file` | 删除工作区文件/目录（不可恢复） | —（无后端） |
+| 40 | `export_tasks` | 待办明细查询/CSV 导出（text/workspace/user/both） | GET `api/v1/tasks/export` |
 
 ## 2. 各工具 LLM 参数签名
 
@@ -101,22 +99,18 @@
 
 ### 待办域
 - `add_task(content: str, category?: str, remind_at?: str, account_id?: int)` — remind_at 格式 YYYY-MM-DD HH:MM
-- `list_tasks(is_done?: bool, account_id?: int)`
+- `list_tasks(is_done?: bool, q?: str, category?: str, from_date?: str, to_date?: str, page?: int, page_size?: int, account_id?: int)` — 默认只看未完成（is_done 不传即未完成）；`q` 内容关键词空格分隔多个词须全部命中；`from_date/to_date` 为创建日期 YYYY-MM-DD；回复带 `total` + 「已生效筛选」自验证（读工具标准形态，2026-08-17 增强）
 - `complete_task(task_id: int)`
 - `undo_task(task_id: int)` — 误标完成时改回未完成
 - `update_task(task_id: int, content?: str, category?: str, remind_at?: str)`
 - `delete_task(task_id: int)`
+- `export_tasks(is_done?: bool, q?: str, category?: str, from_date?: str, to_date?: str, account_id?: int, destination?: str="text", relative_path?: str, limit?: int=20)` — destination ∈ {text, workspace, user, both}；**is_done 缺省 = 全部**（区别于 list_tasks 的默认未完成）；text 走 json 明细（每行带 `#id`），文件导出走 csv（workspace 存当前会话工作区 / user 直接发 CSV / both 两者）；后端 `GET /api/v1/tasks/export`
 
 ### 订阅/新闻域
 - `subscribe_source(source_type: str, name?: str, source_url?: str, preset_key?: str)` — source_type ∈ {rss, preset}
 - `list_subscriptions()`
 - `unsubscribe(subscription_id: int)`
 - `query_news(subscription_id?: int, limit?: int)`
-
-### 记忆域
-- `remember(content: str, category?: str)`
-- `search_memory(q?: str)` — q 空则列最近
-- `forget(memory_id: int)`
 
 ### 抓取域
 - `fetch_source(source_type: str, source_url?: str, preset_key?: str, params?: dict)` — source_type ∈ {rss, url, preset}
@@ -142,7 +136,7 @@
 
 ## 4. 新工具开发约定（写进本地文档）
 
-- 新增工具**先确认不与上表 42 个重名**（含语义相同仅改名的，如已有 `add_bill` 就别再写 `record_bill`/`log_expense`）。
+- 新增工具**先确认不与上表 40 个重名**（含语义相同仅改名的，如已有 `add_bill` 就别再写 `record_bill`/`log_expense`）。
 - 每个工具 = `@filter.llm_tool(name="...")` + async 方法 + **带 Args 的 docstring**（AstrBot 用 docstring 生成 LLM 工具描述，参数名/类型/单位/枚举都要写清楚）。
 - 走 `self._api(method, path, identity=self._identity(event), json_body=...)`，统一错误返回为失败字典。
 - 工具描述里写明行为约定（如 add_bill 的 AA 规则、participants 格式），LLM 靠描述触发正确调用。

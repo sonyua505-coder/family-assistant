@@ -9,7 +9,17 @@ import { AppError } from '../../lib/errors.js';
 import type { createIdentityHooks } from '../../lib/identity.js';
 import type { Identity } from '../../lib/identity.js';
 import { resolveAccountId } from '../system/accounts.js';
-import { createTask, getTask, listTasks, setTaskDone, softDeleteTask, updateTask } from './tasks.js';
+import {
+  buildTaskCsv,
+  createTask,
+  exportTasks,
+  getTask,
+  listTasks,
+  setTaskDone,
+  softDeleteTask,
+  updateTask,
+  type TaskListQuery,
+} from './tasks.js';
 
 export interface TasksRouteDeps {
   db: Database.Database;
@@ -43,16 +53,55 @@ export async function registerTasksRoutes(app: FastifyInstance, deps: TasksRoute
     return { ok: true, task };
   });
 
-  // 查询：?is_done=&category=（默认未完成）
+  // 查询：?q=&category=&is_done=&from=&to=&page=&page_size=（关键词/分类/日期区间/分页）
+  // 默认未完成（is_done 缺省 false，applied 回显）；返回 { items, total, page, page_size, applied }。
   app.get('/api/v1/tasks', { preHandler: requireBoundPerson }, async (req) => {
     const personId = me(req);
     const accountId = resolveAccountId(db, personId, num((req.query as Record<string, unknown>).account_id));
     const q = req.query as Record<string, string | undefined>;
-    const items = listTasks(db, accountId, {
-      is_done: q.is_done === undefined ? false : q.is_done === '1' || q.is_done === 'true',
+    return listTasks(db, accountId, {
+      is_done: q.is_done === undefined ? undefined : q.is_done === '1' || q.is_done === 'true',
       category: q.category,
+      q: q.q,
+      from: q.from,
+      to: q.to,
+      page: q.page !== undefined ? Number(q.page) : undefined,
+      page_size: q.page_size !== undefined ? Number(q.page_size) : undefined,
     });
-    return { items };
+  });
+
+  // ── 全量宽过滤查询/导出（读工具标准形态：强大查询 + 自验证输出）──
+  // format=json 默认 → { total, applied(生效筛选回显), items }，全量无分页；
+  // format=csv → text/csv（UTF-8 BOM + 防公式注入）。
+  app.get('/api/v1/tasks/export', { preHandler: requireBoundPerson }, async (req, reply) => {
+    const personId = me(req);
+    const accountId = resolveAccountId(db, personId, num((req.query as Record<string, unknown>).account_id));
+    const q = req.query as Record<string, string | undefined>;
+    const filter: TaskListQuery = {
+      is_done: q.is_done === undefined ? undefined : q.is_done === '1' || q.is_done === 'true',
+      category: q.category,
+      q: q.q,
+      from: q.from,
+      to: q.to,
+    };
+
+    const tasks = exportTasks(db, accountId, filter);
+
+    // 回显实际生效的筛选（供 LLM 自验证）
+    const applied: Record<string, string | number | boolean> = { account_id: accountId };
+    if (filter.is_done !== undefined) applied.is_done = filter.is_done;
+    if (filter.category) applied.category = filter.category;
+    if (filter.q?.trim()) applied.q = filter.q.trim();
+    if (filter.from) applied.from = filter.from;
+    if (filter.to) applied.to = filter.to;
+
+    if (q.format === 'csv') {
+      const csv = buildTaskCsv(tasks);
+      reply.header('Content-Type', 'text/csv; charset=utf-8');
+      reply.header('Content-Disposition', 'attachment; filename="tasks-export.csv"');
+      return reply.send(`﻿${csv}`);
+    }
+    return { total: tasks.length, applied, items: tasks };
   });
 
   // 改内容/分类/提醒时间

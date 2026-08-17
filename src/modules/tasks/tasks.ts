@@ -6,7 +6,7 @@
 import type Database from 'better-sqlite3';
 import { now } from '../../db/dao.js';
 import { AppError } from '../../lib/errors.js';
-import { getActiveBill } from '../bills/bills.js';
+import { csvCell, getActiveBill } from '../bills/bills.js';
 
 export interface TaskRow {
   id: number;
@@ -71,25 +71,120 @@ export function getTask(db: Database.Database, id: number): TaskRow | undefined 
   return db.prepare('SELECT * FROM tasks WHERE id = ? AND is_deleted = 0').get(id) as TaskRow | undefined;
 }
 
-/** 列表查询（账户内）：默认未完成，可按 is_done / category 过滤。 */
-export function listTasks(
-  db: Database.Database,
-  accountId: number,
-  q: { is_done?: boolean; category?: string } = {},
-): TaskRow[] {
-  const conds = ['account_id = ?', 'is_deleted = 0'];
-  const args: unknown[] = [accountId];
+/** 任务列表/导出查询参数（宽过滤 + 分页）。 */
+export interface TaskListQuery {
+  is_done?: boolean;
+  category?: string;
+  q?: string; // content 关键词，多 token 拆词 AND（转义 LIKE）
+  from?: string; // created_at 起始 YYYY-MM-DD
+  to?: string; // created_at 结束 YYYY-MM-DD
+  page?: number;
+  page_size?: number;
+}
+
+/**
+ * 共享任务过滤条件构建器（listTasks / exportTasks 共用）。
+ * 返回 WHERE 片段 conds 与参数 args，二者按顺序配对（conds.join(' AND ') + ...args）。
+ * is_deleted 打底 + is_done/category 等值 + q 关键词（多 token 拆词 AND，转义 LIKE）+ from/to（created_at 区间）。
+ */
+export function buildTaskFilter(q: TaskListQuery): { conds: string[]; args: unknown[] } {
+  const conds: string[] = ['is_deleted = 0'];
+  const args: unknown[] = [];
+
   if (q.is_done !== undefined) {
     conds.push('is_done = ?');
     args.push(q.is_done ? 1 : 0);
   }
-  if (q.category !== undefined) {
+  if (q.category !== undefined && q.category !== '') {
     conds.push('category = ?');
     args.push(q.category);
   }
+  if (q.q !== undefined && q.q.trim() !== '') {
+    // 多 token 拆词 AND：两词都必须命中（任意位置子串）；转义 \ % _ 防通配符注入
+    for (const token of q.q.trim().split(/\s+/)) {
+      conds.push(`content LIKE '%' || ? || '%' ESCAPE '\\'`);
+      args.push(token.replace(/[\\%_]/g, (ch) => `\\${ch}`));
+    }
+  }
+  if (q.from) {
+    if (!/^\d{4}-\d{2}-\d{2}$/.test(q.from)) throw new AppError(400, 'INVALID_FROM', 'from 需为 YYYY-MM-DD');
+    conds.push('created_at >= ?');
+    args.push(`${q.from} 00:00:00`);
+  }
+  if (q.to) {
+    if (!/^\d{4}-\d{2}-\d{2}$/.test(q.to)) throw new AppError(400, 'INVALID_TO', 'to 需为 YYYY-MM-DD');
+    conds.push('created_at <= ?');
+    args.push(`${q.to} 23:59:59`);
+  }
+
+  return { conds, args };
+}
+
+/**
+ * 列表查询（账户内）：默认未完成（is_done 缺省 false，applied 回显），支持关键词/分类/日期区间 + 分页。
+ * 返回 { items, total, page, page_size, applied }，applied 回显实际生效的筛选供 LLM 自验证。
+ */
+export function listTasks(
+  db: Database.Database,
+  accountId: number,
+  q: TaskListQuery = {},
+): {
+  items: TaskRow[];
+  total: number;
+  page: number;
+  page_size: number;
+  applied: Record<string, string | number | boolean>;
+} {
+  const { conds, args } = buildTaskFilter(q);
+  const condsWithAccount = ['account_id = ?', ...conds];
+  const argsWithAccount = [accountId, ...args];
+  const where = condsWithAccount.join(' AND ');
+
+  const total = (db.prepare(`SELECT COUNT(*) n FROM tasks WHERE ${where}`).get(...argsWithAccount) as { n: number }).n;
+
+  const page = Number.isInteger(q.page) && (q.page as number) > 0 ? (q.page as number) : 1;
+  const pageSize = Number.isInteger(q.page_size) && (q.page_size as number) > 0 ? Math.min(q.page_size as number, 200) : 50;
+  const rows = db
+    .prepare(`SELECT * FROM tasks WHERE ${where} ORDER BY is_done ASC, created_at DESC, id DESC LIMIT ? OFFSET ?`)
+    .all(...argsWithAccount, pageSize, (page - 1) * pageSize) as TaskRow[];
+
+  // 回显实际生效的筛选（缺省 is_done=false 也回显，让 LLM 知道只看到了未完成）
+  const effIsDone = q.is_done === undefined ? false : q.is_done;
+  const applied: Record<string, string | number | boolean> = { account_id: accountId, is_done: effIsDone };
+  if (q.category) applied.category = q.category;
+  if (q.q?.trim()) applied.q = q.q.trim();
+  if (q.from) applied.from = q.from;
+  if (q.to) applied.to = q.to;
+
+  return { items: rows, total, page, page_size: pageSize, applied };
+}
+
+/**
+ * 全量导出（无分页上限）：账户内全部未删除任务，支持宽过滤（复用 buildTaskFilter）。
+ * is_done 缺省 = 全部（仅显式传才回显）。按创建时间升序。
+ */
+export function exportTasks(db: Database.Database, accountId: number, q: TaskListQuery = {}): TaskRow[] {
+  const { conds, args } = buildTaskFilter(q);
+  const condsWithAccount = ['account_id = ?', ...conds];
+  const argsWithAccount = [accountId, ...args];
   return db
-    .prepare(`SELECT * FROM tasks WHERE ${conds.join(' AND ')} ORDER BY is_done ASC, created_at DESC, id DESC`)
-    .all(...args) as TaskRow[];
+    .prepare(`SELECT * FROM tasks WHERE ${condsWithAccount.join(' AND ')} ORDER BY created_at, id`)
+    .all(...argsWithAccount) as TaskRow[];
+}
+
+/** CSV 构建（列：状态/内容/分类/创建时间/完成时间/提醒时间/关联账单）。复用 bills 的 csvCell 防公式注入。 */
+export function buildTaskCsv(tasks: TaskRow[]): string {
+  const header = ['状态', '内容', '分类', '创建时间', '完成时间', '提醒时间', '关联账单'];
+  const rows = tasks.map((t) => [
+    t.is_done ? '已完成' : '未完成',
+    t.content,
+    t.category,
+    t.created_at,
+    t.done_at ?? '',
+    t.remind_at ?? '',
+    t.linked_bill_id === null ? '' : String(t.linked_bill_id),
+  ]);
+  return [header, ...rows].map((row) => row.map(csvCell).join(',')).join('\r\n');
 }
 
 export interface UpdateTaskPatch {

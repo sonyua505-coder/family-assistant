@@ -13,6 +13,7 @@ import { registerBillsRoutes } from './modules/bills/routes.js';
 import { registerOutboxRoutes } from './modules/outbox/routes.js';
 import { registerNewsRoutes } from './modules/news/routes.js';
 import { registerTasksRoutes } from './modules/tasks/routes.js';
+import { registerWorkBillsRoutes } from './modules/work_bills/routes.js';
 import { registerBillsWebRoutes } from './modules/bills_web/routes.js';
 
 export interface AppDeps {
@@ -92,6 +93,7 @@ export function buildApp({ db, registry, config }: AppDeps): FastifyInstance {
   app.register(registerOutboxRoutes, { db, apiKey: config.apiKey });
   app.register(registerNewsRoutes, { db, identity: { requireIdentity, requireBoundPerson } });
   app.register(registerTasksRoutes, { db, identity: { requireIdentity, requireBoundPerson } });
+  app.register(registerWorkBillsRoutes, { db, identity: { requireIdentity, requireBoundPerson } });
   app.register(registerBillsWebRoutes, { db, apiKey: config.apiKey, config, identity: { requireIdentity, requireBoundPerson } });
   app.register(registerInternalRoutes, { registry, adminKey: config.adminKey });
 

@@ -13,7 +13,6 @@ export interface PersonRow {
   id: number;
   display_name: string;   // 数据稳定名（账单/AA/任务里显示，创建时定，少改）
   nickname: string;       // BOT 聊天称呼（空则回落 display_name）
-  profile_text: string;   // 画像文本（仅 QQ 端注入）
   disabled: number;       // 应急禁用标志 0/1
   created_at: string;
   updated_at: string;

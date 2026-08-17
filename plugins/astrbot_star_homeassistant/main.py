@@ -10,6 +10,8 @@
     list_bills / get_bill / list_bill_trash / restore_bill / query_bill_stats /
     query_bill_changes（含 AA 分摊）。
   - 待办：add_task / list_tasks / complete_task / undo_task / update_task / delete_task。
+  - 工作账单（装修安装门，2026-08-18）：add_work_client / set_work_price / add_work_bill /
+    list_work_bills / get_work_bill / settle_work_bill / recalc_work_bills / export_work_bills 等。
   - 订阅/新闻：subscribe_source / list_subscriptions / unsubscribe / query_news。
   - 抓取：fetch_source（SSRF 白名单由后端把关）。
   - 账本链接：create_ledger_link / list_ledger_links / revoke_ledger_link。
@@ -1027,6 +1029,598 @@ class HomeAssistantStar(Star):
         if destination == "user":
             return f"已把 {row_count} 条待办的 CSV 文件发给你。\n{applied_note}"
         return f"已导出 {row_count} 条待办到工作区：{ws_path}，并已把文件发给你。\n{applied_note}"
+
+    # ────────────────────────── 工作账单（装修安装门，2026-08-18） ──────────────────────────
+
+    @staticmethod
+    def _fmt_work_bill(ledger: dict) -> str:
+        """把后端 work_bill 对账对象（{bill, client_name, items, ...}）渲染成给 LLM 的文本。"""
+        b = ledger.get("bill") or {}
+        items = ledger.get("items") or []
+        item_lines = []
+        for it in items:
+            it = it or {}
+            line = f"- {it.get('name', '')} {it.get('qty', '')}{it.get('unit', '')}×{it.get('unit_price', 0)}分={it.get('amount', 0)}分"
+            if it.get("note"):
+                line += f"（{it.get('note')}）"
+            item_lines.append(line)
+        sc = {"settled": "已结算", "partial": "部分结算", "unsettled": "未结算"}.get(ledger.get("status"), ledger.get("status"))
+        head = f"账单 #{b.get('id')} {b.get('occurred_at', '')} {ledger.get('client_name', '')}"
+        if b.get("address"):
+            head += f" {b.get('address')}"
+        if b.get("contact"):
+            head += f" 联系人:{b.get('contact')}"
+        head += f"｜应收 {ledger.get('receivable', 0)}分 已收 {ledger.get('paid', 0)}分 欠 {ledger.get('owed', 0)}分（{sc}）"
+        if b.get("final_amount") is not None:
+            head += f"｜实际应收 {b.get('final_amount')}分"
+        return head + ("\n" + "\n".join(item_lines) if item_lines else "")
+
+    @filter.llm_tool(name="add_work_client")
+    async def add_work_client(
+        self,
+        event: AstrMessageEvent,
+        name: str,
+        type: str = "company",
+        phone: str = None,
+        note: str = None,
+        account_id: int = None,
+    ) -> str:
+        """新建一个委托方（为谁做事/跟谁结算：装修公司或个人）。
+
+        Args:
+            name(string): 委托方名称，如 A装修公司 / 张三。
+            type(string): company=装修公司（默认）；personal=个人委托。
+            phone(string): 联系电话（可选）。
+            note(string): 备注（可选）。
+            account_id(number): 归属账户 id（有多个账本时必须指定）。
+        """
+        body = {"name": name, "type": type}
+        if phone is not None:
+            body["phone"] = phone
+        if note is not None:
+            body["note"] = note
+        qs = f"?account_id={account_id}" if account_id else ""
+        data = await self._api("POST", f"api/v1/work-clients{qs}", identity=self._identity(event), json_body=body)
+        if not data.get("ok", True):
+            return self._err_msg(data)
+        c = data.get("client") or {}
+        return f"已建委托方 #{c.get('id')}：{c.get('name')}（{'装修公司' if c.get('type') == 'company' else '个人委托'}）"
+
+    @filter.llm_tool(name="list_work_clients")
+    async def list_work_clients(self, event: AstrMessageEvent, q: str = None, account_id: int = None) -> str:
+        """列出委托方。
+
+        Args:
+            q(string): 名称/电话关键词（可选）。
+            account_id(number): 归属账户 id（有多个账本时必须指定）。
+        """
+        params = {}
+        if q:
+            params["q"] = q
+        if account_id:
+            params["account_id"] = account_id
+        qs = urlencode(params)
+        data = await self._api("GET", f"api/v1/work-clients?{qs}", identity=self._identity(event))
+        if not data.get("ok", True):
+            return self._err_msg(data)
+        items = data.get("items") or []
+        if not items:
+            return "暂无委托方。"
+        lines = []
+        for c in items[:20]:
+            kind = "装修公司" if c.get("type") == "company" else "个人委托"
+            phone = f" 电话:{c.get('phone')}" if c.get("phone") else ""
+            lines.append(f"#{c.get('id')} {c.get('name')}（{kind}）{phone}")
+        return "委托方：\n" + "\n".join(lines)
+
+    @filter.llm_tool(name="update_work_client")
+    async def update_work_client(
+        self,
+        event: AstrMessageEvent,
+        client_id: int,
+        name: str = None,
+        type: str = None,
+        phone: str = None,
+        note: str = None,
+    ) -> str:
+        """修改委托方信息。
+
+        Args:
+            client_id(number): 委托方 id。
+            name(string): 新名称（可选）。
+            type(string): company 或 personal（可选）。
+            phone(string): 新电话（可选）。
+            note(string): 新备注（可选）。
+        """
+        body = {}
+        if name is not None:
+            body["name"] = name
+        if type is not None:
+            body["type"] = type
+        if phone is not None:
+            body["phone"] = phone
+        if note is not None:
+            body["note"] = note
+        data = await self._api("PATCH", f"api/v1/work-clients/{client_id}", identity=self._identity(event), json_body=body)
+        if not data.get("ok", True):
+            return self._err_msg(data)
+        c = data.get("client") or {}
+        return f"已更新委托方 #{c.get('id')}：{c.get('name')}"
+
+    @filter.llm_tool(name="delete_work_client")
+    async def delete_work_client(self, event: AstrMessageEvent, client_id: int) -> str:
+        """删除一个委托方（其下还有未删除账单时不可删）。
+
+        Args:
+            client_id(number): 委托方 id。
+        """
+        data = await self._api("DELETE", f"api/v1/work-clients/{client_id}", identity=self._identity(event))
+        if not data.get("ok", True):
+            return self._err_msg(data)
+        return f"已删除委托方 #{client_id}。"
+
+    @filter.llm_tool(name="set_work_price")
+    async def set_work_price(
+        self,
+        event: AstrMessageEvent,
+        client_id: int,
+        name: str,
+        unit_price: int,
+        unit: str = None,
+        note: str = None,
+        account_id: int = None,
+    ) -> str:
+        """设置某委托方的安装内容单价（已有同名则更新）。价格按委托方区分。
+
+        Args:
+            client_id(number): 委托方 id。
+            name(string): 品名，如 欧派木门 / 双包卫生间门 / 进户门套 / 隐形门 / 墙板。
+            unit_price(number): 单价（单位：分，1 元 = 100 分）。
+            unit(string): 单位，如 扇/个/套/㎡（可选，默认 个）。
+            note(string): 备注（可选）。
+            account_id(number): 归属账户 id（有多个账本时必须指定）。
+        """
+        body = {"client_id": client_id, "name": name, "unit_price": unit_price}
+        if unit is not None:
+            body["unit"] = unit
+        if note is not None:
+            body["note"] = note
+        qs = f"?account_id={account_id}" if account_id else ""
+        data = await self._api("POST", f"api/v1/work-unit-prices{qs}", identity=self._identity(event), json_body=body)
+        if not data.get("ok", True):
+            return self._err_msg(data)
+        p = data.get("price") or {}
+        return f"已设置单价：{p.get('name')} {p.get('unit_price')}分/{p.get('unit')}（委托方#{p.get('client_id')}）"
+
+    @filter.llm_tool(name="list_work_prices")
+    async def list_work_prices(
+        self, event: AstrMessageEvent, client_id: int = None, q: str = None, account_id: int = None
+    ) -> str:
+        """列出单价表。
+
+        Args:
+            client_id(number): 按委托方过滤（可选）。
+            q(string): 品名关键词（可选）。
+            account_id(number): 归属账户 id（有多个账本时必须指定）。
+        """
+        params = {}
+        if client_id:
+            params["client_id"] = client_id
+        if q:
+            params["q"] = q
+        if account_id:
+            params["account_id"] = account_id
+        qs = urlencode(params)
+        data = await self._api("GET", f"api/v1/work-unit-prices?{qs}", identity=self._identity(event))
+        if not data.get("ok", True):
+            return self._err_msg(data)
+        items = data.get("items") or []
+        if not items:
+            return "暂无单价记录。"
+        lines = [f"#{p.get('id')} {p.get('name')} {p.get('unit_price')}分/{p.get('unit')}（委托方#{p.get('client_id')}）" for p in items[:50]]
+        return "单价表：\n" + "\n".join(lines)
+
+    @filter.llm_tool(name="delete_work_price")
+    async def delete_work_price(self, event: AstrMessageEvent, price_id: int, account_id: int = None) -> str:
+        """删除一条单价记录（历史账单单价快照不受影响，重算时跳过）。
+
+        Args:
+            price_id(number): 单价记录 id。
+            account_id(number): 归属账户 id（有多个账本时必须指定）。
+        """
+        qs = f"?account_id={account_id}" if account_id else ""
+        data = await self._api("DELETE", f"api/v1/work-unit-prices/{price_id}{qs}", identity=self._identity(event))
+        if not data.get("ok", True):
+            return self._err_msg(data)
+        return f"已删除单价 #{price_id}。"
+
+    @filter.llm_tool(name="add_work_bill")
+    async def add_work_bill(
+        self,
+        event: AstrMessageEvent,
+        client_id: int,
+        items: list,
+        address: str = None,
+        contact: str = None,
+        occurred_at: str = None,
+        note: str = None,
+        final_amount: int = None,
+        account_id: int = None,
+    ) -> str:
+        """新建一张工作账单（安装门的工作记录）。金额 = Σ明细小计；明细单价缺省自动按该委托方单价表带出，可覆盖。
+
+        Args:
+            client_id(number): 委托方 id。
+            items(list): 安装内容明细行数组，每项 {name: 品名, qty?: 数量(可小数,默认1), unit?: 单位, unit_price?: 单价(分,缺省从单价表带出), note?: 行备注}。
+            address(string): 安装地点（可选）。
+            contact(string): 服务对象/联系人姓名（可选）。
+            occurred_at(string): 安装日期 YYYY-MM-DD（可选，默认今天）。
+            note(string): 整单备注（可选）。
+            final_amount(number): 实际应收（分，可选；缺省按明细计算）。
+            account_id(number): 归属账户 id（有多个账本时必须指定）。
+        """
+        body = {"client_id": client_id, "items": items}
+        if address is not None:
+            body["address"] = address
+        if contact is not None:
+            body["contact"] = contact
+        if occurred_at is not None:
+            body["occurred_at"] = occurred_at
+        if note is not None:
+            body["note"] = note
+        if final_amount is not None:
+            body["final_amount"] = final_amount
+        qs = f"?account_id={account_id}" if account_id else ""
+        data = await self._api("POST", f"api/v1/work-bills{qs}", identity=self._identity(event), json_body=body)
+        if not data.get("ok", True):
+            return self._err_msg(data)
+        return self._fmt_work_bill(data.get("bill") or {})
+
+    @filter.llm_tool(name="list_work_bills")
+    async def list_work_bills(
+        self,
+        event: AstrMessageEvent,
+        client_id: int = None,
+        contact: str = None,
+        status: str = None,
+        from_date: str = None,
+        to_date: str = None,
+        account_id: int = None,
+        page: int = None,
+        page_size: int = None,
+    ) -> str:
+        """列出工作账单，支持按委托方/联系人/状态/安装日期过滤 + 分页，回显生效筛选。
+
+        Args:
+            client_id(number): 委托方 id（可选）。
+            contact(string): 服务对象/联系人姓名关键词（可选）。
+            status(string): 状态，unsettled=未结算 / partial=部分结算 / settled=已结算（可选）。
+            from_date(string): 起始安装日期 YYYY-MM-DD（可选）。
+            to_date(string): 结束安装日期 YYYY-MM-DD（可选）。
+            account_id(number): 归属账户 id（有多个账本时必须指定）。
+            page(number): 页码，从 1 开始（可选）。
+            page_size(number): 每页条数，默认 50，最大 200（可选）。
+        """
+        params = {}
+        if client_id:
+            params["client_id"] = client_id
+        if contact:
+            params["contact"] = contact
+        if status:
+            params["status"] = status
+        if from_date:
+            params["from"] = from_date
+        if to_date:
+            params["to"] = to_date
+        if account_id:
+            params["account_id"] = account_id
+        if page:
+            params["page"] = page
+        if page_size:
+            params["page_size"] = page_size
+        qs = urlencode(params)
+        data = await self._api("GET", f"api/v1/work-bills?{qs}", identity=self._identity(event))
+        if not data.get("ok", True):
+            return self._err_msg(data)
+        items = data.get("items") or []
+        total = data.get("total") or len(items)
+        applied = data.get("applied") or {}
+        if not items:
+            return "没有符合条件的账单。" + (f"\n已生效筛选：{applied}" if applied else "")
+        lines = [f"共 {total} 张工作账单（显示前 {len(items)} 条）："]
+        for it in items[:20]:
+            sc = {"settled": "已结", "partial": "部分结", "unsettled": "未结"}.get(it.get("status"), it.get("status"))
+            lines.append(
+                f"#{it.get('id')} {it.get('occurred_at', '')} {it.get('client_name', '')} "
+                f"{it.get('address', '')} {it.get('contact', '')}｜应收{it.get('receivable', 0)}分 已收{it.get('paid', 0)}分 {sc}"
+            )
+        if total > len(items):
+            lines.append(f"\n…还有 {total - len(items)} 张未显示，可缩小条件或用 export_work_bills 导出。")
+        if applied:
+            lines.append(f"已生效筛选：{applied}")
+        return "\n".join(lines)
+
+    @filter.llm_tool(name="get_work_bill")
+    async def get_work_bill(self, event: AstrMessageEvent, bill_id: int) -> str:
+        """查看一张工作账单的完整明细（含安装内容式子、应收/已收/欠款/状态）。
+
+        Args:
+            bill_id(number): 工作账单 id。
+        """
+        data = await self._api("GET", f"api/v1/work-bills/{bill_id}", identity=self._identity(event))
+        if not data.get("ok", True):
+            return self._err_msg(data)
+        return self._fmt_work_bill(data.get("bill") or {})
+
+    @filter.llm_tool(name="update_work_bill")
+    async def update_work_bill(
+        self,
+        event: AstrMessageEvent,
+        bill_id: int,
+        client_id: int = None,
+        address: str = None,
+        contact: str = None,
+        occurred_at: str = None,
+        note: str = None,
+        final_amount: int = None,
+        items: list = None,
+    ) -> str:
+        """修改工作账单（传 items 时全量替换明细，务必传全量）。
+
+        Args:
+            bill_id(number): 工作账单 id。
+            client_id(number): 改委托方（可选）。
+            address(string): 安装地点（可选）。
+            contact(string): 服务对象（可选）。
+            occurred_at(string): 安装日期 YYYY-MM-DD（可选）。
+            note(string): 整单备注（可选）。
+            final_amount(number): 实际应收（分，可选；传 0 清除回按明细计算）。
+            items(list): 全量替换明细（格式同 add_work_bill 的 items，传则整组替换）。
+        """
+        body = {}
+        if client_id is not None:
+            body["client_id"] = client_id
+        if address is not None:
+            body["address"] = address
+        if contact is not None:
+            body["contact"] = contact
+        if occurred_at is not None:
+            body["occurred_at"] = occurred_at
+        if note is not None:
+            body["note"] = note
+        if final_amount is not None:
+            body["final_amount"] = final_amount if final_amount != 0 else None  # 0 = 清除
+        if items is not None:
+            body["items"] = items
+        data = await self._api("PATCH", f"api/v1/work-bills/{bill_id}", identity=self._identity(event), json_body=body)
+        if not data.get("ok", True):
+            return self._err_msg(data)
+        return self._fmt_work_bill(data.get("bill") or {})
+
+    @filter.llm_tool(name="delete_work_bill")
+    async def delete_work_bill(self, event: AstrMessageEvent, bill_id: int) -> str:
+        """删除一张工作账单（软删）。
+
+        Args:
+            bill_id(number): 工作账单 id。
+        """
+        data = await self._api("DELETE", f"api/v1/work-bills/{bill_id}", identity=self._identity(event))
+        if not data.get("ok", True):
+            return self._err_msg(data)
+        return f"已删除工作账单 #{bill_id}。"
+
+    @filter.llm_tool(name="settle_work_bill")
+    async def settle_work_bill(
+        self,
+        event: AstrMessageEvent,
+        bill_id: int,
+        amount: int,
+        settled_at: str = None,
+        note: str = None,
+    ) -> str:
+        """记录一笔结算实收（可多次、可部分；金额记实际收到，与计算金额解耦）。
+
+        Args:
+            bill_id(number): 工作账单 id。
+            amount(number): 本次实收金额（单位：分，1 元 = 100 分）。
+            settled_at(string): 结算日期 YYYY-MM-DD（可选，默认今天）。
+            note(string): 备注（可选）。
+        """
+        body = {"amount": amount}
+        if settled_at is not None:
+            body["settled_at"] = settled_at
+        if note is not None:
+            body["note"] = note
+        data = await self._api("POST", f"api/v1/work-bills/{bill_id}/settle", identity=self._identity(event), json_body=body)
+        if not data.get("ok", True):
+            return self._err_msg(data)
+        return f"已记录结算 {amount} 分。\n" + self._fmt_work_bill(data.get("bill") or {})
+
+    @filter.llm_tool(name="recalc_work_bills")
+    async def recalc_work_bills(
+        self,
+        event: AstrMessageEvent,
+        bill_ids: list = None,
+        client_id: int = None,
+        from_date: str = None,
+        to_date: str = None,
+        apply: bool = False,
+    ) -> str:
+        """按最新单价表批量重算未结算账单（已结算单锁定不动）。改单价后账单不会自动变，需要时手动触发；默认只预览返回 diff，apply=true 才提交。
+
+        Args:
+            bill_ids(list): 只重算指定的账单 id 数组（可选；不给则按 client_id/日期筛全部未结算单）。
+            client_id(number): 按委托方筛全部未结算单（可选）。
+            from_date(string): 起始安装日期 YYYY-MM-DD（可选）。
+            to_date(string): 结束安装日期 YYYY-MM-DD（可选）。
+            apply(boolean): true=提交重算；默认 false=只预览（可选）。
+        """
+        params = {}
+        if bill_ids:
+            params["bill_ids"] = ",".join(str(x) for x in bill_ids)
+        if client_id:
+            params["client_id"] = client_id
+        if from_date:
+            params["from"] = from_date
+        if to_date:
+            params["to"] = to_date
+        if apply:
+            params["dry_run"] = "0"
+        qs = urlencode(params)
+        data = await self._api("POST", f"api/v1/work-bills/recalc?{qs}", identity=self._identity(event))
+        if not data.get("ok", True):
+            return self._err_msg(data)
+        changed = data.get("changed") or []
+        dry = data.get("dry_run", True)
+        if not changed:
+            return "重算预览：没有明细需要更新（无未结算单或单价未变）。"
+        lines = [f"重算{'预览' if dry else '完成'}：{data.get('affected_bills', 0)} 张账单共 {data.get('total_changes', 0)} 处明细变更："]
+        for c in changed[:30]:
+            lines.append(
+                f"- 账单#{c.get('bill_id')} {c.get('name')} {c.get('qty')}{c.get('unit')}："
+                f"{c.get('old_price')}分→{c.get('new_price')}分（{c.get('old_amount')}分→{c.get('new_amount')}分）"
+            )
+        if dry:
+            lines.append("\n这是预览，未实际修改。确认后可用 recalc_work_bills(apply=true) 提交。")
+        if data.get("applied"):
+            lines.append(f"已生效筛选：{data.get('applied')}")
+        return "\n".join(lines)
+
+    @filter.llm_tool(name="export_work_bills")
+    async def export_work_bills(
+        self,
+        event: AstrMessageEvent,
+        mode: str = "summary",
+        client_id: int = None,
+        from_date: str = None,
+        to_date: str = None,
+        status: str = None,
+        account_id: int = None,
+        destination: str = "text",
+        relative_path: str = None,
+        limit: int = 20,
+    ) -> str:
+        """导出工作账单。summary=日常简版（明细平铺）；statement=结账版（含计算式子+对账）。纯查询返回文本；也可存工作区/发 CSV 文件。
+
+        Args:
+            mode(string): summary=日常简版（默认）；statement=结账版（带式子）。
+            client_id(number): 按委托方过滤（可选）。
+            from_date(string): 起始安装日期 YYYY-MM-DD（可选）。
+            to_date(string): 结束安装日期 YYYY-MM-DD（可选）。
+            status(string): unsettled/partial/settled（可选）。
+            account_id(number): 归属账户 id（有多个账本时必须指定）。
+            destination(string): text=纯查询返回文本（默认）；workspace=只存会话工作区；user=直接把 CSV 文件发给你；both=两者。
+            relative_path(string): destination 为 workspace/both 时的工作区内相对路径（可选，默认自动命名）。
+            limit(number): 纯查询模式下最多返回账单条数，默认 20，最大 50（可选）。
+        """
+        filters = {"mode": mode}
+        if client_id:
+            filters["client_id"] = client_id
+        if from_date:
+            filters["from"] = from_date
+        if to_date:
+            filters["to"] = to_date
+        if status:
+            filters["status"] = status
+        if account_id:
+            filters["account_id"] = account_id
+
+        if destination == "text":
+            qs = urlencode(filters)
+            data = await self._api("GET", f"api/v1/work-bills/export?{qs}", identity=self._identity(event))
+            if not data.get("ok", True):
+                return self._err_msg(data)
+            bills = data.get("bills") or []
+            total = data.get("total") or len(bills)
+            applied = data.get("applied") or {}
+            if not bills:
+                return "没有符合条件的账单。" + (f"\n已生效筛选：{applied}" if applied else "")
+            try:
+                cap = max(1, min(int(limit) if limit else 20, 50))
+            except (TypeError, ValueError):
+                cap = 20
+            shown = bills[:cap]
+            lines = [f"共 {total} 张账单（显示前 {len(shown)} 张）："]
+            for b in shown:
+                sc = {"settled": "已结", "partial": "部分结", "unsettled": "未结"}.get(b.get("status"), b.get("status"))
+                if mode == "statement":
+                    lines.append(f"#{b.get('id')} {b.get('occurred_at', '')} {b.get('client_name', '')} {b.get('address', '')} {b.get('contact', '')}")
+                    lines.append(f"  式子：{b.get('formula', '')}")
+                    lines.append(f"  计算{b.get('computed_total', 0)}分｜应收{b.get('receivable', 0)}分｜已收{b.get('paid', 0)}分｜欠{b.get('owed', 0)}分（{sc}）")
+                else:
+                    for it in b.get("items") or []:
+                        lines.append(f"#{b.get('id')} {b.get('occurred_at', '')} {b.get('client_name', '')}｜{it.get('name')} {it.get('qty')}{it.get('unit')} {it.get('amount', 0)}分")
+            if total > len(shown):
+                lines.append(f"\n…还有 {total - len(shown)} 张未显示，可用 destination=user 发文件或 destination=workspace 存工作区。")
+            if applied:
+                lines.append(f"已生效筛选：{applied}")
+            return "\n".join(lines)
+
+        # 文件导出模式：CSV
+        params = dict(filters)
+        params["format"] = "csv"
+        qs = urlencode(params)
+        ret = await self._api_raw("GET", f"api/v1/work-bills/export?{qs}", identity=self._identity(event))
+        if isinstance(ret, dict):
+            return self._err_msg(ret)
+        http_status, csv_text = ret
+        if http_status >= 400:
+            return f"导出失败（HTTP {http_status}）：{csv_text[:300]}"
+        if not isinstance(csv_text, str) or not csv_text.strip():
+            return "导出失败：后端返回空内容。"
+        try:
+            row_count = max(0, sum(1 for _ in csv.reader(io.StringIO(csv_text))) - 1)
+        except Exception:
+            row_count = 0
+
+        ws_path = None
+        if destination in ("workspace", "both"):
+            try:
+                if relative_path:
+                    target = self._resolve_workspace_rel(event, relative_path)
+                else:
+                    target = (
+                        self._workspace_root(event)
+                        / "exports"
+                        / f"work-bills-{mode}_{datetime.now():%Y%m%d_%H%M%S}.csv"
+                    )
+                target.parent.mkdir(parents=True, exist_ok=True)
+                with open(target, "w", encoding="utf-8", newline="") as f:
+                    f.write(csv_text)
+                ws_path = target.relative_to(self._workspace_root(event)).as_posix()
+            except ValueError as e:
+                return f"无效路径：{e}"
+
+        if destination in ("user", "both"):
+            filename = (
+                os.path.basename(ws_path)
+                if ws_path
+                else f"work-bills-{mode}_{datetime.now():%Y%m%d_%H%M%S}.csv"
+            )
+            tmp = os.path.join(get_astrbot_temp_path(), f"ha_export_{uuid.uuid4().hex}.csv")
+            with open(tmp, "w", encoding="utf-8", newline="") as f:
+                f.write(csv_text)
+            try:
+                ok = await self.context.send_message(
+                    event.unified_msg_origin,
+                    MessageChain([File(name=filename, file=tmp)]),
+                )
+                if not ok:
+                    return f"文件已生成但发送失败（未匹配到平台）。工作区副本：{ws_path or filename}"
+            finally:
+                if os.path.exists(tmp):
+                    os.remove(tmp)
+
+        applied_note = f"筛选：{dict(params)}"
+        if destination == "workspace":
+            return (
+                f"已导出 {row_count} 行到工作区：{ws_path}。\n"
+                f"{applied_note}\n"
+                f"可用文件工具读取/处理，或让我把它发给你。"
+            )
+        if destination == "user":
+            return f"已把 {row_count} 行的 CSV 文件发给你。\n{applied_note}"
+        return f"已导出 {row_count} 行到工作区：{ws_path}，并已把文件发给你。\n{applied_note}"
 
     # ────────────────────────── 订阅与新闻 ──────────────────────────
 

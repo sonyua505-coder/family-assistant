@@ -26,6 +26,7 @@ import {
   updateClient,
   updateWorkBill,
   upsertUnitPrice,
+  workBillStats,
   buildWorkBillsStatementCsv,
   buildWorkBillsSummaryCsv,
   type CreateWorkBillInput,
@@ -139,6 +140,7 @@ export async function registerWorkBillsRoutes(app: FastifyInstance, deps: WorkBi
     return listWorkBills(db, accountId, {
       client_id: num(q.client_id),
       contact: q.contact,
+      keyword: q.keyword,
       status: q.status,
       from: q.from,
       to: q.to,
@@ -209,6 +211,20 @@ export async function registerWorkBillsRoutes(app: FastifyInstance, deps: WorkBi
     });
   });
 
+  // 区间统计：合计应收/已收/欠款 + 按委托方 + 按月份（applied 回显）
+  app.get('/api/v1/work-bills/stats', { preHandler: requireBoundPerson }, async (req) => {
+    const accountId = resolveAccountId(db, me(req), num(qs(req).account_id));
+    const q = qs(req);
+    return workBillStats(db, accountId, {
+      from: q.from,
+      to: q.to,
+      year: q.year !== undefined ? Number(q.year) : undefined,
+      month: q.month !== undefined ? Number(q.month) : undefined,
+      client_id: num(q.client_id),
+      status: q.status,
+    });
+  });
+
   // 全量导出：mode=statement 结账版（式子）/ summary 日常简版；format=json|csv
   app.get('/api/v1/work-bills/export', { preHandler: requireBoundPerson }, async (req, reply) => {
     const personId = me(req);
@@ -218,6 +234,7 @@ export async function registerWorkBillsRoutes(app: FastifyInstance, deps: WorkBi
     const { bills, total, applied } = exportWorkBills(db, accountId, {
       client_id: num(q.client_id),
       contact: q.contact,
+      keyword: q.keyword,
       status: q.status,
       from: q.from,
       to: q.to,

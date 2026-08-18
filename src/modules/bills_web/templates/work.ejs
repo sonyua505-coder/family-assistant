@@ -1,0 +1,83 @@
+<h1>工作记账</h1>
+
+<% if (error) { %><div class="error"><%= error %></div><% } %>
+
+<% if (accounts.length === 0) { %>
+  <div class="empty">还没有账本。</div>
+<% } else { %>
+
+<form class="toolbar" method="get" action="/w/<%= token %>/work">
+  <select name="account_id">
+    <% accounts.forEach(function(a){ %>
+      <option value="<%= a.id %>" <%= a.id === accountId ? 'selected' : '' %>><%= a.name %></option>
+    <% }) %>
+  </select>
+  <button>切换账本</button>
+</form>
+
+<% if (mode === 'write') { %>
+<div class="card">
+  <h2>新建工作账单</h2>
+  <form method="post" action="/w/<%= token %>/work">
+    <input type="hidden" name="account_id" value="<%= accountId %>">
+    <div class="toolbar">
+      <select name="client_id" required>
+        <option value="">选择委托方</option>
+        <% clients.forEach(function(c){ %><option value="<%= c.id %>"><%= c.name %></option><% }) %>
+      </select>
+      <input type="text" name="address" placeholder="安装地点">
+      <input type="text" name="contact" placeholder="联系人">
+      <input type="date" name="occurred_at">
+    </div>
+    <p class="muted" style="margin:10px 0 6px">安装内容（最多 4 行，品名留空的行忽略；单价留空自动按委托方单价表带出，单位：元）</p>
+    <% for (var i = 0; i < 4; i++) { %>
+    <div class="toolbar">
+      <input type="text" name="i<%= i %>_name" placeholder="品名（如 欧派木门）">
+      <input type="number" name="i<%= i %>_qty" min="0" step="0.01" placeholder="数量">
+      <input type="text" name="i<%= i %>_unit" placeholder="单位">
+      <input type="number" name="i<%= i %>_unit_price" min="0" step="0.01" placeholder="单价(元)">
+    </div>
+    <% } %>
+    <div class="toolbar">
+      <input type="text" name="note" placeholder="整单备注（可选）">
+      <button>记单</button>
+    </div>
+  </form>
+</div>
+<% } %>
+
+<% if (items.length === 0) { %>
+  <div class="empty">暂无工作账单</div>
+<% } else { %>
+<div class="table-wrap">
+<table>
+<tr><th>日期</th><th>委托方</th><th>地点</th><th>联系人</th><th class="num">应收</th><th class="num">已收</th><th class="num">欠款</th><th>状态</th><% if (mode === 'write') { %><th>操作</th><% } %></tr>
+<% items.forEach(function(b){ %>
+<tr>
+  <td style="white-space:nowrap"><%= b.occurred_at %></td>
+  <td><%= b.client_name %></td>
+  <td class="muted"><%= b.address %></td>
+  <td class="muted"><%= b.contact %></td>
+  <td class="num amount"><%= b.receivable %></td>
+  <td class="num amount income"><%= b.paid %></td>
+  <td class="num amount <%= b.owed_class %>"><%= b.owed %></td>
+  <td style="white-space:nowrap"><span class="badge <%= b.status === 'settled' ? 'settled' : 'pending' %>"><%= b.status === 'settled' ? '✅ 已结清' : b.status === 'partial' ? '🕐 部分结算' : '⏳ 未结算' %></span></td>
+  <% if (mode === 'write') { %>
+  <td style="white-space:nowrap">
+    <% if (b.status !== 'settled') { %>
+    <form class="inline" method="post" action="/w/<%= token %>/work/<%= b.id %>/settle">
+      <input type="number" name="amount" min="0.01" step="0.01" placeholder="收款(元)" style="width:90px" required>
+      <button title="记一笔结算">💰 收款</button>
+    </form>
+    <% } %>
+    <form class="inline" method="post" action="/w/<%= token %>/work/<%= b.id %>/delete"><button class="danger" title="删除">🗑️</button></form>
+  </td>
+  <% } %>
+</tr>
+<% }) %>
+</table>
+</div>
+<div class="muted">共 <%= total %> 张工作账单</div>
+<% } %>
+
+<% } %>

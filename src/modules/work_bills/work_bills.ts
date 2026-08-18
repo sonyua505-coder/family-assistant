@@ -7,7 +7,8 @@
 import type Database from 'better-sqlite3';
 import { now, today } from '../../db/dao.js';
 import { AppError } from '../../lib/errors.js';
-import { yuan, csvCell } from '../bills/bills.js';
+import { resolveStatsRange, yuan, csvCell } from '../bills/bills.js';
+import { listAccountsForPerson } from '../system/accounts.js';
 
 // ── 类型 ──
 
@@ -107,6 +108,7 @@ export interface UpdateWorkBillPatch {
 export interface WorkBillListQuery {
   client_id?: number;
   contact?: string;
+  keyword?: string; // 地址或备注包含（多 token AND）
   status?: string; // unsettled | partial | settled（派生）
   from?: string;
   to?: string;
@@ -475,6 +477,14 @@ function buildWorkBillFilter(q: WorkBillListQuery & { account_id: number }): { i
     conds.push("wb.contact LIKE '%' || ? || '%' ESCAPE '\\'");
     args.push(escLike(q.contact.trim()));
   }
+  if (q.keyword?.trim()) {
+    // 地址或备注包含（多 token 拆词 AND；每个 token 匹配 address OR note）
+    for (const token of q.keyword.trim().split(/\s+/)) {
+      const esc = escLike(token);
+      conds.push("(wb.address LIKE '%' || ? || '%' ESCAPE '\\' OR wb.note LIKE '%' || ? || '%' ESCAPE '\\')");
+      args.push(esc, esc);
+    }
+  }
   if (q.from) {
     conds.push('wb.occurred_at >= ?');
     args.push(normalizeDate(q.from, 'from'));
@@ -512,6 +522,7 @@ export function listWorkBills(db: Database.Database, accountId: number, q: WorkB
   const applied: Record<string, string | number> = { account_id: accountId };
   if (q.client_id !== undefined) applied.client_id = q.client_id;
   if (q.contact?.trim()) applied.contact = q.contact.trim();
+  if (q.keyword?.trim()) applied.keyword = q.keyword.trim();
   if (q.status) applied.status = q.status;
   if (q.from) applied.from = q.from;
   if (q.to) applied.to = q.to;
@@ -574,6 +585,7 @@ export function exportWorkBills(db: Database.Database, accountId: number, q: Omi
   const applied: Record<string, string | number> = { account_id: accountId };
   if (q.client_id !== undefined) applied.client_id = q.client_id;
   if (q.contact?.trim()) applied.contact = q.contact.trim();
+  if (q.keyword?.trim()) applied.keyword = q.keyword.trim();
   if (q.status) applied.status = q.status;
   if (q.from) applied.from = q.from;
   if (q.to) applied.to = q.to;
@@ -621,6 +633,190 @@ export function buildWorkBillsStatementCsv(bills: WorkBillExportOut[]): string {
     b.status === 'settled' ? '已结算' : b.status === 'partial' ? '部分结算' : '未结算',
   ]);
   return [header, ...rows].map((row) => row.map(csvCell).join(',')).join('\r\n');
+}
+
+// ── 统计 ──
+
+export interface WorkStatsQuery {
+  from?: string; // YYYY-MM-DD
+  to?: string; // YYYY-MM-DD
+  year?: number;
+  month?: number;
+  client_id?: number;
+  status?: string; // unsettled | partial | settled
+}
+
+/**
+ * 工作账单统计（账户内，不含已删除）：合计应收/已收/欠款 + 按委托方 + 按月份。
+ * 口径与 calcLedger 一致：receivable = COALESCE(final_amount, Σ明细)；paid = Σ结算；owed = receivable - paid。
+ * 返回 `{ bill_count, receivable, paid, owed, by_client, by_month, applied }`，金额「分」。
+ */
+export function workBillStats(db: Database.Database, accountId: number, q: WorkStatsQuery = {}): {
+  bill_count: number;
+  receivable: number;
+  paid: number;
+  owed: number;
+  by_client: Array<{ client_id: number; client_name: string; bill_count: number; receivable: number; paid: number; owed: number }>;
+  by_month: Array<{ month: string; bill_count: number; receivable: number; paid: number; owed: number }>;
+  applied: Record<string, string | number | null>;
+} {
+  const range = resolveStatsRange({ from: q.from, to: q.to, year: q.year, month: q.month });
+
+  const conds = ['wb.account_id = ?', 'wb.is_deleted = 0'];
+  const args: unknown[] = [accountId];
+  if (q.client_id !== undefined) {
+    conds.push('wb.client_id = ?');
+    args.push(q.client_id);
+  }
+  if (range.from) {
+    conds.push('wb.occurred_at >= ?');
+    args.push(range.from);
+  }
+  if (range.to) {
+    conds.push('wb.occurred_at <= ?');
+    args.push(range.to);
+  }
+  const innerWhere = conds.join(' AND ');
+
+  const fromSql = `FROM (
+    SELECT wb.*,
+      COALESCE(wb.final_amount, (SELECT SUM(i.amount) FROM work_bill_items i WHERE i.bill_id = wb.id)) AS receivable,
+      COALESCE((SELECT SUM(s.amount) FROM work_settlements s WHERE s.bill_id = wb.id), 0) AS paid,
+      COALESCE(wb.final_amount, (SELECT SUM(i.amount) FROM work_bill_items i WHERE i.bill_id = wb.id))
+        - COALESCE((SELECT SUM(s.amount) FROM work_settlements s WHERE s.bill_id = wb.id), 0) AS owed
+    FROM work_bills wb
+    WHERE ${innerWhere}
+  ) wbx
+  LEFT JOIN work_clients c ON c.id = wbx.client_id`;
+
+  let statusWhere = '';
+  if (q.status !== undefined) {
+    if (q.status !== 'unsettled' && q.status !== 'partial' && q.status !== 'settled') {
+      throw new AppError(400, 'INVALID_WORK_STATUS', 'status 需为 unsettled | partial | settled');
+    }
+    statusWhere = "WHERE CASE WHEN wbx.paid = 0 THEN 'unsettled' WHEN wbx.paid >= wbx.receivable THEN 'settled' ELSE 'partial' END = ?";
+  }
+  const whereArgs = [...args, ...(q.status !== undefined ? [q.status] : [])];
+
+  const totals = db
+    .prepare(`SELECT COUNT(*) bill_count, COALESCE(SUM(receivable), 0) receivable, COALESCE(SUM(paid), 0) paid, COALESCE(SUM(owed), 0) owed ${fromSql} ${statusWhere}`)
+    .get(...whereArgs) as { bill_count: number; receivable: number; paid: number; owed: number };
+
+  const byClient = db
+    .prepare(
+      `SELECT wbx.client_id, c.name AS client_name, COUNT(*) bill_count, COALESCE(SUM(wbx.receivable), 0) receivable,
+              COALESCE(SUM(wbx.paid), 0) paid, COALESCE(SUM(wbx.owed), 0) owed
+       ${fromSql} ${statusWhere} GROUP BY wbx.client_id ORDER BY owed DESC`,
+    )
+    .all(...whereArgs) as Array<{ client_id: number; client_name: string; bill_count: number; receivable: number; paid: number; owed: number }>;
+
+  const byMonth = db
+    .prepare(
+      `SELECT strftime('%Y-%m', wbx.occurred_at) month, COUNT(*) bill_count, COALESCE(SUM(wbx.receivable), 0) receivable,
+              COALESCE(SUM(wbx.paid), 0) paid, COALESCE(SUM(wbx.owed), 0) owed
+       ${fromSql} ${statusWhere} GROUP BY strftime('%Y-%m', wbx.occurred_at) ORDER BY month`,
+    )
+    .all(...whereArgs) as Array<{ month: string; bill_count: number; receivable: number; paid: number; owed: number }>;
+
+  const applied: Record<string, string | number | null> = { from: range.from, to: range.to };
+  if (q.client_id !== undefined) applied.client_id = q.client_id;
+  if (q.status) applied.status = q.status;
+
+  return {
+    bill_count: totals.bill_count,
+    receivable: totals.receivable,
+    paid: totals.paid,
+    owed: totals.owed,
+    by_client: byClient,
+    by_month: byMonth,
+    applied,
+  };
+}
+
+// ── 每日变动汇总（work_digest 用）──
+
+export interface WorkDailyChange {
+  account_id: number;
+  account_name: string;
+  created: Array<{ bill_id: number; client_name: string; contact: string; receivable: number; status: WorkBillStatus }>;
+  settled_count: number;
+  settled_total: number;
+  updated: number;
+  deleted: number;
+}
+
+/**
+ * 按 person 可见账户汇总当日工作账单变动（供每晚 work_digest 推送确认）。
+ * created/updated/deleted 取自 operation_logs（entity='work_bills'，entity_id=账单 id）；
+ * settled 直接查 work_settlements 表当日记录（结算日志 after 只存 bill 不含金额，故不走日志）。
+ */
+export function workBillChanges(db: Database.Database, personId: number, date: string): WorkDailyChange[] {
+  const accounts = listAccountsForPerson(db, personId);
+  if (accounts.length === 0) return [];
+  const accountIds = accounts.map((a) => a.id);
+  const placeholders = accountIds.map(() => '?').join(',');
+
+  const logs = db
+    .prepare(
+      `SELECT account_id, action, entity_id FROM operation_logs
+       WHERE entity IN ('work_bills','work_settlements') AND account_id IN (${placeholders}) AND substr(created_at,1,10) = ?`,
+    )
+    .all(...accountIds, date) as Array<{ account_id: number; action: string; entity_id: number }>;
+
+  const byAccount = new Map<number, { created: number[]; settled_count: number; settled_total: number; updated: number; deleted: number }>();
+  for (const log of logs) {
+    const entry = byAccount.get(log.account_id) ?? { created: [], settled_count: 0, settled_total: 0, updated: 0, deleted: 0 };
+    if (log.entity_id === undefined) continue;
+    if (log.action === 'work_bill.create') entry.created.push(log.entity_id);
+    else if (log.action === 'work_bill.update') entry.updated++;
+    else if (log.action === 'work_bill.delete') entry.deleted++;
+    byAccount.set(log.account_id, entry);
+  }
+
+  // 结算：当日实际入账（JOIN 可见账单）
+  const settlements = db
+    .prepare(
+      `SELECT s.amount, wb.account_id FROM work_settlements s
+       JOIN work_bills wb ON wb.id = s.bill_id
+       WHERE wb.account_id IN (${placeholders}) AND substr(s.created_at,1,10) = ?`,
+    )
+    .all(...accountIds, date) as Array<{ amount: number; account_id: number }>;
+  for (const s of settlements) {
+    const entry = byAccount.get(s.account_id) ?? { created: [], settled_count: 0, settled_total: 0, updated: 0, deleted: 0 };
+    entry.settled_count++;
+    entry.settled_total += s.amount;
+    byAccount.set(s.account_id, entry);
+  }
+
+  const result: WorkDailyChange[] = [];
+  for (const account of accounts) {
+    const entry = byAccount.get(account.id);
+    if (!entry) continue;
+    const created = entry.created
+      .map((billId) => {
+        const ledger = getWorkBillLedger(db, billId);
+        if (!ledger) return null;
+        const client = getClient(db, ledger.bill.client_id);
+        return {
+          bill_id: billId,
+          client_name: client?.name ?? '',
+          contact: ledger.bill.contact,
+          receivable: ledger.receivable,
+          status: ledger.status,
+        };
+      })
+      .filter((x): x is NonNullable<typeof x> => x !== null);
+    result.push({
+      account_id: account.id,
+      account_name: account.name,
+      created,
+      settled_count: entry.settled_count,
+      settled_total: entry.settled_total,
+      updated: entry.updated,
+      deleted: entry.deleted,
+    });
+  }
+  return result;
 }
 
 // ── 结算 ──

@@ -17,6 +17,7 @@ import { getSettingBool, getSettingDefault } from '../modules/system/settings.js
 import { enqueue } from '../modules/outbox/index.js';
 import { sweepTerminal } from '../modules/outbox/service.js';
 import { billChanges, type ChangeSummary } from '../modules/bills/bills.js';
+import { workBillChanges, type WorkDailyChange } from '../modules/work_bills/work_bills.js';
 import { cleanupOldNews, runSubscriptionFetch } from '../modules/news/service.js';
 import type { SubscriptionRow } from '../modules/news/subscriptions.js';
 
@@ -171,6 +172,86 @@ function formatBillDigest(date: string, changes: ChangeSummary[]): string {
     for (const s of c.suspect_duplicates) {
       lines.push(`⚠ 疑似重复：${yuan(s.amount)}元/${s.category} ×${s.count}`);
     }
+  }
+  return has ? lines.join('\n') : '';
+}
+
+// ── 任务：工作账单日报（work_digest，复用 bill_digest_time，默认 21:00）──
+
+/**
+ * 汇总当日工作账单变动（新增/结算/修改/删除），推给相关 person（接收人规则同 bill_digest：
+ * family=全成员、personal=本人）。当日已发则不重发。返回本次发出条数。
+ */
+export function runWorkDigest(db: Database.Database, date: string = today()): number {
+  if (!getSettingBool(db, 'work_digest_enabled', true)) return 0;
+  if (!pastTime(getSettingDefault(db, 'bill_digest_time', '21:00'))) return 0;
+
+  // 当日有 work 变动（建单/改单/删单/结算）的账户
+  const changedAccounts = db
+    .prepare(
+      `SELECT DISTINCT account_id FROM operation_logs
+       WHERE entity IN ('work_bills','work_settlements') AND account_id IS NOT NULL AND substr(created_at,1,10) = ?`,
+    )
+    .all(date) as Array<{ account_id: number }>;
+
+  const recipients = new Set<number>();
+  for (const { account_id } of changedAccounts) {
+    const account = db.prepare('SELECT * FROM accounts WHERE id = ?').get(account_id) as
+      | { type: string; owner_person_id: number }
+      | undefined;
+    if (!account) continue;
+    if (account.type === 'family') {
+      const members = db.prepare('SELECT person_id FROM account_members WHERE account_id = ?').all(account_id) as Array<{
+        person_id: number;
+      }>;
+      for (const m of members) recipients.add(m.person_id);
+    } else {
+      recipients.add(account.owner_person_id);
+    }
+  }
+
+  let sent = 0;
+  for (const personId of recipients) {
+    if (alreadySentToday(db, personId, 'work_digest')) continue;
+    const identity = primaryIdentity(db, personId);
+    if (!identity) continue; // 无任何平台身份的人发不了
+    const text = formatWorkDigest(date, workBillChanges(db, personId, date));
+    if (!text) continue;
+    enqueue(db, {
+      personId,
+      channel: identity.platform,
+      targetId: identity.openid,
+      kind: 'work_digest',
+      content: text,
+    });
+    sent++;
+  }
+  return sent;
+}
+
+/** 把某 person 当日各账户的工作账单变动汇总成纯文本日报。 */
+function formatWorkDigest(date: string, changes: WorkDailyChange[]): string {
+  const lines = [`【工作账单日报 ${date}】`];
+  let has = false;
+  for (const c of changes) {
+    const parts: string[] = [];
+    if (c.created.length > 0) {
+      const brief = c.created
+        .slice(0, 5)
+        .map((b) => {
+          const who = b.contact ? `${b.client_name}·${b.contact}` : b.client_name;
+          const st = b.status === 'settled' ? '已结' : b.status === 'partial' ? '部分结' : '未结';
+          return `${who} ${yuan(b.receivable)}元(${st})`;
+        })
+        .join('、');
+      parts.push(`新增 ${c.created.length} 张${brief ? `（${brief}${c.created.length > 5 ? '…' : ''}）` : ''}`);
+    }
+    if (c.settled_count > 0) parts.push(`收到结算 ${c.settled_count} 笔 合计 ${yuan(c.settled_total)}元`);
+    if (c.updated > 0) parts.push(`修改 ${c.updated} 张`);
+    if (c.deleted > 0) parts.push(`删除 ${c.deleted} 张`);
+    if (parts.length === 0) continue;
+    has = true;
+    lines.push(`${c.account_name}：${parts.join('；')}`);
   }
   return has ? lines.join('\n') : '';
 }

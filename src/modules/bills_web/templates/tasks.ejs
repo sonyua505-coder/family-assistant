@@ -1,0 +1,62 @@
+<h1>待办</h1>
+
+<% if (error) { %><div class="error"><%= error %></div><% } %>
+
+<% if (accounts.length === 0) { %>
+  <div class="empty">还没有账本。</div>
+<% } else { %>
+
+<form class="toolbar" method="get" action="/w/<%= token %>/tasks">
+  <select name="account_id">
+    <% accounts.forEach(function(a){ %>
+      <option value="<%= a.id %>" <%= a.id === accountId ? 'selected' : '' %>><%= a.name %></option>
+    <% }) %>
+  </select>
+  <button>切换账本</button>
+</form>
+
+<% if (mode === 'write') { %>
+<div class="card">
+  <h2>新增待办</h2>
+  <form method="post" action="/w/<%= token %>/tasks">
+    <input type="hidden" name="account_id" value="<%= accountId %>">
+    <div class="toolbar">
+      <input type="text" name="content" placeholder="内容" required>
+      <input type="text" name="category" placeholder="分类（可选）">
+      <input type="datetime-local" name="remind_at">
+      <button>新增</button>
+    </div>
+  </form>
+</div>
+<% } %>
+
+<% if (items.length === 0) { %>
+  <div class="empty">暂无待办</div>
+<% } else { %>
+<div class="table-wrap">
+<table>
+<tr><th>状态</th><th>内容</th><th>分类</th><th>提醒</th><% if (mode === 'write') { %><th>操作</th><% } %></tr>
+<% items.forEach(function(t){ %>
+<tr>
+  <td style="white-space:nowrap"><span class="badge <%= t.is_done ? 'settled' : 'pending' %>"><%= t.is_done ? '✅ 已完成' : '🕐 未完成' %></span></td>
+  <td><%= t.content %></td>
+  <td class="muted"><%= t.category %></td>
+  <td class="muted" style="white-space:nowrap"><%= t.remind_at %></td>
+  <% if (mode === 'write') { %>
+  <td style="white-space:nowrap">
+    <% if (!t.is_done) { %>
+      <form class="inline" method="post" action="/w/<%= token %>/tasks/<%= t.id %>/done"><button title="完成">✅ 完成</button></form>
+    <% } else { %>
+      <form class="inline" method="post" action="/w/<%= token %>/tasks/<%= t.id %>/undo"><button class="ghost" title="改回未完成">↩️</button></form>
+    <% } %>
+    <form class="inline" method="post" action="/w/<%= token %>/tasks/<%= t.id %>/delete"><button class="danger" title="删除">🗑️</button></form>
+  </td>
+  <% } %>
+</tr>
+<% }) %>
+</table>
+</div>
+<div class="muted">共 <%= total %> 条待办（未完成在前）</div>
+<% } %>
+
+<% } %>

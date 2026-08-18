@@ -24,6 +24,8 @@ export const tpl = {
   aa: load('aa.ejs'),
   trash: load('trash.ejs'),
   edit: load('edit.ejs'),
+  tasks: load('tasks.ejs'),
+  work: load('work.ejs'),
 };
 
 /** 渲染完整页面：子模板 → body（已转义），再套 layout。 */

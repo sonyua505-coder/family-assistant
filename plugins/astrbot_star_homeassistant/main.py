@@ -242,6 +242,64 @@ class HomeAssistantStar(Star):
         fig.savefig(out_path, bbox_inches="tight", facecolor="white")
         plt.close(fig)
 
+    def _render_work_stats_png(self, stats: dict, period: str, out_path: str) -> None:
+        """渲染工作账单统计图（经 asyncio.to_thread；金额单位：元）。
+
+        左=按委托方欠款（横向条形，Top6+其他）；右=按月份应收/已收（分组柱状）。
+        """
+        import numpy as np
+
+        plt = self._plt
+        by_client = sorted(
+            [c for c in (stats.get("by_client") or []) if c.get("owed")],
+            key=lambda c: c["owed"],
+            reverse=True,
+        )
+        by_month = stats.get("by_month") or []
+
+        fig, (ax1, ax2) = plt.subplots(1, 2, figsize=(12, 5), dpi=150)
+        fig.suptitle(f"家庭信息助理 · 工作账单统计 {period}", fontsize=13)
+
+        # 左：按委托方欠款 —— 横向条形
+        if by_client:
+            top = by_client[:6]
+            labels = [c["client_name"] for c in top]
+            vals = [c["owed"] / 100 for c in top]
+            rest = sum(c["owed"] for c in by_client[6:]) / 100
+            if rest > 0:
+                labels.append("其他")
+                vals.append(rest)
+            y = np.arange(len(vals))[::-1]
+            ax1.barh(y, vals, color="#eb6834", height=0.62)
+            ax1.set_yticks(y, labels)
+            ax1.set_title("按委托方欠款（元）")
+            for yi, v in zip(y, vals):
+                ax1.text(v, yi, f"{v:,.0f}", va="center", ha="left", fontsize=9)
+            ax1.tick_params(axis="x", labelsize=8)
+        else:
+            ax1.text(0.5, 0.5, "暂无委托方数据", ha="center", va="center", transform=ax1.transAxes)
+
+        # 右：按月份应收/已收 —— 分组柱状（应收蓝 / 已收绿）
+        if by_month:
+            months = [m.get("month", "") for m in by_month]
+            recv = [m.get("receivable", 0) / 100 for m in by_month]
+            paid = [m.get("paid", 0) / 100 for m in by_month]
+            x = np.arange(len(months))
+            w = 0.36
+            b1 = ax2.bar(x - w / 2, recv, w, color="#2a78d6", label="应收")
+            b2 = ax2.bar(x + w / 2, paid, w, color="#16a34a", label="已收")
+            ax2.set_xticks(x, months, rotation=30, ha="right", fontsize=8)
+            ax2.set_ylabel("元")
+            ax2.legend(frameon=False)
+            ax2.bar_label(b1, fontsize=8, padding=2)
+            ax2.bar_label(b2, fontsize=8, padding=2)
+        else:
+            ax2.text(0.5, 0.5, "暂无月份数据", ha="center", va="center", transform=ax2.transAxes)
+
+        fig.tight_layout(rect=[0, 0, 1, 0.95])
+        fig.savefig(out_path, bbox_inches="tight", facecolor="white")
+        plt.close(fig)
+
     # ────────────────────────── 会话注册 ──────────────────────────
 
     @filter.regex(r".*")
@@ -1097,6 +1155,7 @@ class HomeAssistantStar(Star):
         event: AstrMessageEvent,
         client_id: int = None,
         contact: str = None,
+        keyword: str = None,
         status: str = None,
         from_date: str = None,
         to_date: str = None,
@@ -1104,11 +1163,12 @@ class HomeAssistantStar(Star):
         page: int = None,
         page_size: int = None,
     ) -> str:
-        """列出工作账单，支持按委托方/联系人/状态/安装日期过滤 + 分页，回显生效筛选。
+        """列出工作账单，支持按委托方/联系人/地址备注/状态/安装日期过滤 + 分页，回显生效筛选。
 
         Args:
             client_id(number): 委托方 id（可选）。
             contact(string): 服务对象/联系人姓名关键词（可选）。
+            keyword(string): 地址或备注包含的关键词，空格分隔多个词须全部命中（可选）。
             status(string): 状态，unsettled=未结算 / partial=部分结算 / settled=已结算（可选）。
             from_date(string): 起始安装日期 YYYY-MM-DD（可选）。
             to_date(string): 结束安装日期 YYYY-MM-DD（可选）。
@@ -1121,6 +1181,8 @@ class HomeAssistantStar(Star):
             params["client_id"] = client_id
         if contact:
             params["contact"] = contact
+        if keyword:
+            params["keyword"] = keyword
         if status:
             params["status"] = status
         if from_date:
@@ -1307,6 +1369,7 @@ class HomeAssistantStar(Star):
         event: AstrMessageEvent,
         mode: str = "summary",
         client_id: int = None,
+        keyword: str = None,
         from_date: str = None,
         to_date: str = None,
         status: str = None,
@@ -1320,6 +1383,7 @@ class HomeAssistantStar(Star):
         Args:
             mode(string): summary=日常简版（默认）；statement=结账版（带式子）。
             client_id(number): 按委托方过滤（可选）。
+            keyword(string): 地址或备注包含的关键词（可选）。
             from_date(string): 起始安装日期 YYYY-MM-DD（可选）。
             to_date(string): 结束安装日期 YYYY-MM-DD（可选）。
             status(string): unsettled/partial/settled（可选）。
@@ -1331,6 +1395,8 @@ class HomeAssistantStar(Star):
         filters = {"mode": mode}
         if client_id:
             filters["client_id"] = client_id
+        if keyword:
+            filters["keyword"] = keyword
         if from_date:
             filters["from"] = from_date
         if to_date:
@@ -1436,6 +1502,93 @@ class HomeAssistantStar(Star):
         if destination == "user":
             return f"已把 {row_count} 行的 CSV 文件发给你。\n{applied_note}"
         return f"已导出 {row_count} 行到工作区：{ws_path}，并已把文件发给你。\n{applied_note}"
+
+    @filter.llm_tool(name="work_bill_stats")
+    async def work_bill_stats(
+        self,
+        event: AstrMessageEvent,
+        year: int = None,
+        month: int = None,
+        from_date: str = None,
+        to_date: str = None,
+        client_id: int = None,
+        status: str = None,
+        account_id: int = None,
+        chart: bool = False,
+    ) -> str:
+        """工作账单统计：合计应收/已收/欠款 + 按委托方 + 按月份；chart=True 附统计图。
+
+        Args:
+            year(number): 年份 YYYY（可选）。
+            month(number): 月份 1-12（可选，需配 year）。
+            from_date(string): 起始安装日期 YYYY-MM-DD（可选，优先于 year/month）。
+            to_date(string): 结束安装日期 YYYY-MM-DD（可选）。
+            client_id(number): 按委托方过滤（可选）。
+            status(string): unsettled/partial/settled（可选）。
+            account_id(number): 归属账户 id（有多个账本时必须指定）。
+            chart(boolean): 是否发送统计图 PNG（默认 false）。
+        """
+        params = {}
+        if year is not None:
+            params["year"] = year
+        if month is not None:
+            params["month"] = month
+        if from_date:
+            params["from"] = from_date
+        if to_date:
+            params["to"] = to_date
+        if client_id:
+            params["client_id"] = client_id
+        if status:
+            params["status"] = status
+        if account_id:
+            params["account_id"] = account_id
+        qs = urlencode(params)
+        data = await self._api("GET", f"api/v1/work-bills/stats?{qs}", identity=self._identity(event))
+        if not data.get("ok", True):
+            return self._err_msg(data)
+
+        def _y(v):
+            return (v or 0) / 100
+
+        lines = [
+            f"工作账单统计：共 {data.get('bill_count', 0)} 张｜"
+            f"应收 {_y(data.get('receivable')):,.2f}元｜已收 {_y(data.get('paid')):,.2f}元｜欠款 {_y(data.get('owed')):,.2f}元"
+        ]
+        by_client = data.get("by_client") or []
+        if by_client:
+            lines.append("按委托方：")
+            for c in by_client[:8]:
+                lines.append(
+                    f"  {c.get('client_name')} {c.get('bill_count')}张｜应收{_y(c.get('receivable')):,.2f} "
+                    f"已收{_y(c.get('paid')):,.2f} 欠{_y(c.get('owed')):,.2f}元"
+                )
+        by_month = data.get("by_month") or []
+        if by_month:
+            lines.append("按月份：")
+            for m in by_month[:12]:
+                lines.append(f"  {m.get('month')} {m.get('bill_count')}张｜应收{_y(m.get('receivable')):,.2f} 已收{_y(m.get('paid')):,.2f}元")
+        if data.get("applied"):
+            lines.append(f"已生效筛选：{data.get('applied')}")
+        text = "\n".join(lines)
+
+        if chart and (data.get("receivable") or data.get("paid")):
+            if not self._ensure_matplotlib():
+                return text + "\n（图表生成失败，仅返回文字）"
+            png = os.path.join(get_astrbot_temp_path(), f"ha_work_stats_{uuid.uuid4().hex}.png")
+            try:
+                await asyncio.to_thread(self._render_work_stats_png, data, str(data.get("applied") or {}), png)
+                caption = f"工作账单统计（单位：元）· 应收 {_y(data.get('receivable')):,.2f} 元"
+                await self.context.send_message(
+                    event.unified_msg_origin,
+                    MessageChain().message(caption).file_image(png),
+                )
+            except Exception as e:
+                logger.error(f"[HomeAssistant] 发送工作统计图失败: {e}")
+            finally:
+                if os.path.exists(png):
+                    os.remove(png)
+        return text
 
     # ────────────────────────── 订阅与新闻 ──────────────────────────
 

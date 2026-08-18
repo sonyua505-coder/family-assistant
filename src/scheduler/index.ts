@@ -6,7 +6,7 @@
  */
 import cron from 'node-cron';
 import type Database from 'better-sqlite3';
-import { runBillDigest, runDailyBrief, runNewsCleanup, runNewsFetch, runOutboxSweep, runReminderDue } from './tasks.js';
+import { runBillDigest, runDailyBrief, runNewsCleanup, runNewsFetch, runOutboxSweep, runReminderDue, runWorkDigest } from './tasks.js';
 
 export interface SchedulerDeps {
   db: Database.Database;
@@ -55,6 +55,11 @@ export class Scheduler {
     // 每日简报：同 bill_digest，按 settings 时刻 + 幂等
     this.jobs.push(
       cron.schedule('*/5 * * * *', () => safeRun('daily_brief', () => runDailyBrief(this.db), this.log), opts),
+    );
+
+    // 工作账单日报：同 bill_digest 时刻（settings bill_digest_time），独立 kind 幂等
+    this.jobs.push(
+      cron.schedule('*/5 * * * *', () => safeRun('work_digest', () => runWorkDigest(this.db), this.log), opts),
     );
 
     // outbox 终态清理：每 10 分钟

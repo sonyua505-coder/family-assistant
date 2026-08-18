@@ -39,6 +39,8 @@ import {
   updateBill,
   yuan,
 } from '../bills/bills.js';
+import { createTask, getTask, listTasks, setTaskDone, softDeleteTask } from '../tasks/tasks.js';
+import { createWorkBill, getWorkBillLedger, listClients, listWorkBills, settleWorkBill, softDeleteWorkBill } from '../work_bills/work_bills.js';
 import { listTokens, mintToken, revokeToken, verifyToken } from './tokens.js';
 import { checkRateLimit, clearFailures, recordFailure } from './ratelimit.js';
 import { renderPage, tpl } from './templates.js';
@@ -529,6 +531,186 @@ export async function registerBillsWebRoutes(app: FastifyInstance, deps: BillsWe
     }
   });
 
+  // ──────────────────────────────────────────────
+  // 待办（tasks，2026-08-18）
+  // ──────────────────────────────────────────────
+
+  app.get('/w/:token/tasks', { preHandler: webAuth }, async (req, reply) => {
+    const { personId } = req.web!;
+    const token = (req.params as { token: string }).token;
+    const q = req.query as Record<string, string | undefined>;
+    const { account, accounts } = webAccount(personId, q.account_id !== undefined ? Number(q.account_id) : undefined);
+    if (!account) return reply.type('text/html; charset=utf-8').send(renderPage('待办', token, req.web!.mode, tpl.tasks, { accounts: [], accountId: 0, error: '' }));
+
+    // 未完成 + 已完成各取一批合并展示（未完成在前）
+    const undone = listTasks(db, account.id, { is_done: false, page_size: 200 });
+    const done = listTasks(db, account.id, { is_done: true, page_size: 200 });
+    const rows = [...undone.items, ...done.items].map((t) => ({
+      id: t.id,
+      content: t.content,
+      category: t.category,
+      is_done: t.is_done,
+      remind_at: t.remind_at,
+    }));
+    const html = renderPage('待办', token, req.web!.mode, tpl.tasks, {
+      accounts: accounts.map((a) => ({ id: a.id, name: a.name })),
+      accountId: account.id,
+      items: rows,
+      total: rows.length,
+      error: typeof q.error === 'string' ? q.error : '',
+    });
+    return reply.type('text/html; charset=utf-8').send(html);
+  });
+
+  app.post('/w/:token/tasks', { preHandler: [webAuth, requireWrite] }, async (req, reply) => {
+    const { personId } = req.web!;
+    const token = (req.params as { token: string }).token;
+    const body = (req.body ?? {}) as Record<string, unknown>;
+    const fail = (msg: string) => redirect(reply, `/w/${token}/tasks?error=${encodeURIComponent(msg)}`);
+    const accountId = Number(body.account_id);
+    if (!Number.isInteger(accountId) || accountId <= 0) return fail('缺少账本');
+    const content = String(body.content ?? '').trim();
+    if (!content) return fail('内容不能为空');
+    try {
+      resolveAccountId(db, personId, accountId); // 越权校验
+      const taskId = createTask(db, {
+        account_id: accountId,
+        creator_id: personId,
+        platform: 'web',
+        content,
+        category: typeof body.category === 'string' && body.category.trim() ? body.category.trim() : undefined,
+        remind_at: typeof body.remind_at === 'string' && body.remind_at ? body.remind_at : undefined,
+      });
+      const task = getTask(db, taskId)!;
+      logOperation(db, { personId, accountId, action: 'task.create', entity: 'tasks', entityId: taskId, after: task });
+      return redirect(reply, `/w/${token}/tasks?account_id=${accountId}`);
+    } catch (err) {
+      return fail((err as Error).message);
+    }
+  });
+
+  app.post('/w/:token/tasks/:id/done', { preHandler: [webAuth, requireWrite] }, async (req, reply) => {
+    const { personId } = req.web!;
+    const token = (req.params as { token: string }).token;
+    const task = requireTask(personId, (req.params as { id: string }).id);
+    const updated = setTaskDone(db, task.id, true)!;
+    logOperation(db, { personId, accountId: task.account_id, action: 'task.done', entity: 'tasks', entityId: task.id, after: updated });
+    return redirect(reply, `/w/${token}/tasks?account_id=${task.account_id}`);
+  });
+
+  app.post('/w/:token/tasks/:id/undo', { preHandler: [webAuth, requireWrite] }, async (req, reply) => {
+    const { personId } = req.web!;
+    const token = (req.params as { token: string }).token;
+    const task = requireTask(personId, (req.params as { id: string }).id);
+    const updated = setTaskDone(db, task.id, false)!;
+    logOperation(db, { personId, accountId: task.account_id, action: 'task.undo', entity: 'tasks', entityId: task.id, after: updated });
+    return redirect(reply, `/w/${token}/tasks?account_id=${task.account_id}`);
+  });
+
+  app.post('/w/:token/tasks/:id/delete', { preHandler: [webAuth, requireWrite] }, async (req, reply) => {
+    const { personId } = req.web!;
+    const token = (req.params as { token: string }).token;
+    const task = requireTask(personId, (req.params as { id: string }).id);
+    softDeleteTask(db, task.id);
+    logOperation(db, { personId, accountId: task.account_id, action: 'task.delete', entity: 'tasks', entityId: task.id, before: task });
+    return redirect(reply, `/w/${token}/tasks?account_id=${task.account_id}`);
+  });
+
+  // ──────────────────────────────────────────────
+  // 工作记账（work_bills，2026-08-18）
+  // ──────────────────────────────────────────────
+
+  app.get('/w/:token/work', { preHandler: webAuth }, async (req, reply) => {
+    const { personId } = req.web!;
+    const token = (req.params as { token: string }).token;
+    const q = req.query as Record<string, string | undefined>;
+    const { account, accounts } = webAccount(personId, q.account_id !== undefined ? Number(q.account_id) : undefined);
+    if (!account) return reply.type('text/html; charset=utf-8').send(renderPage('工作记账', token, req.web!.mode, tpl.work, { accounts: [], accountId: 0, error: '' }));
+
+    const { items } = listWorkBills(db, account.id, { page_size: 200 });
+    const clients = listClients(db, account.id);
+    const rows = items.map((b) => ({
+      id: b.id,
+      client_name: b.client_name,
+      address: b.address,
+      contact: b.contact,
+      occurred_at: b.occurred_at,
+      receivable: yuan(b.receivable),
+      paid: yuan(b.paid),
+      owed: yuan(b.owed),
+      owed_class: b.owed > 0 ? 'expense' : '',
+      status: b.status,
+    }));
+    const html = renderPage('工作记账', token, req.web!.mode, tpl.work, {
+      accounts: accounts.map((a) => ({ id: a.id, name: a.name })),
+      accountId: account.id,
+      items: rows,
+      total: rows.length,
+      clients: clients.map((c) => ({ id: c.id, name: c.name })),
+      error: typeof q.error === 'string' ? q.error : '',
+    });
+    return reply.type('text/html; charset=utf-8').send(html);
+  });
+
+  app.post('/w/:token/work', { preHandler: [webAuth, requireWrite] }, async (req, reply) => {
+    const { personId } = req.web!;
+    const token = (req.params as { token: string }).token;
+    const body = (req.body ?? {}) as Record<string, unknown>;
+    const fail = (msg: string) => redirect(reply, `/w/${token}/work?error=${encodeURIComponent(msg)}`);
+    const accountId = Number(body.account_id);
+    if (!Number.isInteger(accountId) || accountId <= 0) return fail('缺少账本');
+    const clientId = Number(body.client_id);
+    if (!Number.isInteger(clientId) || clientId <= 0) return fail('缺少委托方');
+    try {
+      resolveAccountId(db, personId, accountId); // 越权校验
+      const billId = createWorkBill(db, accountId, {
+        client_id: clientId,
+        address: String(body.address ?? ''),
+        contact: String(body.contact ?? ''),
+        occurred_at: typeof body.occurred_at === 'string' && body.occurred_at ? body.occurred_at : undefined,
+        note: String(body.note ?? ''),
+        items: parseWorkItems(body),
+      });
+      const ledger = getWorkBillLedger(db, billId)!;
+      logOperation(db, { personId, accountId, action: 'work_bill.create', entity: 'work_bills', entityId: billId, after: ledger.bill });
+      return redirect(reply, `/w/${token}/work?account_id=${accountId}`);
+    } catch (err) {
+      return fail((err as Error).message);
+    }
+  });
+
+  app.post('/w/:token/work/:id/settle', { preHandler: [webAuth, requireWrite] }, async (req, reply) => {
+    const { personId } = req.web!;
+    const token = (req.params as { token: string }).token;
+    const { id } = req.params as { id: string };
+    const bill = requireWorkBill(personId, id);
+    const body = (req.body ?? {}) as Record<string, unknown>;
+    const fail = (msg: string) => redirect(reply, `/w/${token}/work?account_id=${bill.bill.account_id}&error=${encodeURIComponent(msg)}`);
+    const amountYuan = Number(body.amount);
+    const amount = Math.round(amountYuan * 100);
+    if (!Number.isFinite(amount) || amount <= 0) return fail('收款金额非法');
+    try {
+      const updated = settleWorkBill(db, bill.bill.id, {
+        amount,
+        settled_at: typeof body.settled_at === 'string' && body.settled_at ? body.settled_at : undefined,
+      });
+      if (!updated) throw new AppError(404, 'WORK_BILL_NOT_FOUND', '账单不存在');
+      logOperation(db, { personId, accountId: bill.bill.account_id, action: 'work_settlement.create', entity: 'work_settlements', entityId: bill.bill.id, after: updated.bill });
+      return redirect(reply, `/w/${token}/work?account_id=${bill.bill.account_id}`);
+    } catch (err) {
+      return fail((err as Error).message);
+    }
+  });
+
+  app.post('/w/:token/work/:id/delete', { preHandler: [webAuth, requireWrite] }, async (req, reply) => {
+    const { personId } = req.web!;
+    const token = (req.params as { token: string }).token;
+    const bill = requireWorkBill(personId, (req.params as { id: string }).id);
+    softDeleteWorkBill(db, bill.bill.id);
+    logOperation(db, { personId, accountId: bill.bill.account_id, action: 'work_bill.delete', entity: 'work_bills', entityId: bill.bill.id, before: bill.bill });
+    return redirect(reply, `/w/${token}/work?account_id=${bill.bill.account_id}`);
+  });
+
   // ── 私有辅助 ──
 
   function errorPage(message: string): string {
@@ -537,6 +719,50 @@ export async function registerBillsWebRoutes(app: FastifyInstance, deps: BillsWe
 <p style="font-size:18px;color:#b71c1c">${escHtml(message)}</p>
 <p class="muted">如持续失效，请联系家人重新生成记账链接。</p>
 </body></html>`;
+  }
+
+  /** 从表单解析工作账单明细（i0_name/i0_qty/i0_unit/i0_unit_price…；空品名行跳过；单价元→分）。 */
+  function parseWorkItems(body: Record<string, unknown>): Array<{ name: string; qty?: number; unit?: string; unit_price?: number }> {
+    const out: Array<{ name: string; qty?: number; unit?: string; unit_price?: number }> = [];
+    for (let i = 0; i < 8; i++) {
+      const name = String(body[`i${i}_name`] ?? '').trim();
+      if (!name) continue;
+      const item: { name: string; qty?: number; unit?: string; unit_price?: number } = { name };
+      const qtyRaw = body[`i${i}_qty`];
+      if (qtyRaw !== undefined && qtyRaw !== '') {
+        const q = Number(qtyRaw);
+        if (Number.isFinite(q) && q > 0) item.qty = q;
+      }
+      const unitRaw = body[`i${i}_unit`];
+      if (unitRaw !== undefined && String(unitRaw).trim()) item.unit = String(unitRaw).trim();
+      const priceRaw = body[`i${i}_unit_price`];
+      if (priceRaw !== undefined && priceRaw !== '') {
+        const p = Number(priceRaw);
+        if (Number.isFinite(p) && p >= 0) item.unit_price = Math.round(p * 100);
+      }
+      out.push(item);
+    }
+    return out;
+  }
+
+  /** 取一条未删除待办并校验当前 person 对其账户有访问权。 */
+  function requireTask(personId: number, rawId: string) {
+    const id = Number(rawId);
+    if (!Number.isInteger(id) || id <= 0) throw new AppError(400, 'INVALID_ID', 'id 非法');
+    const task = getTask(db, id);
+    if (!task) throw new AppError(404, 'TASK_NOT_FOUND', '任务不存在或已删除');
+    resolveAccountId(db, personId, task.account_id); // 越权 403
+    return task;
+  }
+
+  /** 取一张未删除工作账单（含对账）并校验当前 person 对其账户有访问权。 */
+  function requireWorkBill(personId: number, rawId: string) {
+    const id = Number(rawId);
+    if (!Number.isInteger(id) || id <= 0) throw new AppError(400, 'INVALID_ID', 'id 非法');
+    const ledger = getWorkBillLedger(db, id);
+    if (!ledger) throw new AppError(404, 'WORK_BILL_NOT_FOUND', '账单不存在或已删除');
+    resolveAccountId(db, personId, ledger.bill.account_id); // 越权 403
+    return ledger;
   }
 
   /** 取一条未删除账单并校验当前 person 对其账户有访问权。 */

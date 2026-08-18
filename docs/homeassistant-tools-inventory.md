@@ -1,7 +1,7 @@
 # 家庭信息助理 · AstrBot 插件 LLM 工具清单（实测）
 
 > 来源：云端运行态 `/opt/homeassistant/plugins/astrbot_star_homeassistant/main.py`
-> 整理日期：2026-08-15（2026-08-16 同步到 42 个：方向 A 新增 bill_stats / export_bills；方向 B 新增 save_uploaded_file / parse_bills_file / import_bills / delete_file；**2026-08-17 调整为 40 个**：移除记忆域 remember/search_memory/forget，新增待办导出 export_tasks；**2026-08-18 新增 15 个 work_* 工具 → 55 个，随后删除 6 个旧查询工具 → 49 个**：工作账单域 + 移除 list_bills/get_bill/query_bill_stats/query_bill_changes/list_bill_trash/restore_bill（已被 bill_stats/export_bills 等替代，实测无问题））
+> 整理日期：2026-08-15（2026-08-16 同步到 42 个：方向 A 新增 bill_stats / export_bills；方向 B 新增 save_uploaded_file / parse_bills_file / import_bills / delete_file；**2026-08-17 调整为 40 个**：移除记忆域 remember/search_memory/forget，新增待办导出 export_tasks；**2026-08-18 新增 15 个 work_* 工具 → 55 个，随后删除 6 个旧查询工具 → 49 个，再新增 work_bill_stats → 50 个**：工作账单域 + 移除 list_bills/get_bill/query_bill_stats/query_bill_changes/list_bill_trash/restore_bill（已被 bill_stats/export_bills 等替代）+ keyword 搜索/统计/日报/WEB 页面）
 > 用途：本地设计文档的权威对照。**新增工具不得与下表重名/同义**；本地要加新工具时，先在文档里追加条目再开发，避免云端部署时撞名。
 
 ## 0. 插件骨架（非工具，但契约相关）
@@ -15,7 +15,7 @@
 | outbox 主动推送 | 后台轮询 `GET /api/v1/outbox/pending?channel=qq&limit=10` → `context.send_message` → 回执 `POST /api/v1/outbox/{id}/delivery` |
 | 平台 id | 从 UMO 首段推断（qq_official），无命中时按 `{platform}:FriendMessage:{openid}` 构造 C2C 会话 |
 
-## 1. 工具总表（49 个）
+## 1. 工具总表（50 个）
 
 | # | 工具名 | 功能 | 后端端点 |
 |---|--------|------|----------|
@@ -68,6 +68,7 @@
 | 47 | `settle_work_bill` | 记录一笔结算实收（可多次/部分） | POST `api/v1/work-bills/{id}/settle` |
 | 48 | `recalc_work_bills` | 批量重算未结算单（dry_run 预览/apply） | POST `api/v1/work-bills/recalc` |
 | 49 | `export_work_bills` | 账单查询/CSV 导出（summary/statement） | GET `api/v1/work-bills/export` |
+| 50 | `work_bill_stats` | 工作账单统计（合计应收/已收/欠款 + 按委托方/月份，chart 出图） | GET `api/v1/work-bills/stats` |
 
 ## 2. 各工具 LLM 参数签名
 
@@ -118,13 +119,14 @@
 - `list_work_prices(client_id?: int, q?: str, account_id?: int)`
 - `delete_work_price(price_id: int, account_id?: int)` — 历史账单单价快照不受影响
 - `add_work_bill(client_id: int, items: list, address?: str, contact?: str, occurred_at?: str, note?: str, final_amount?: int, account_id?: int)` — items=[{name, qty?, unit?, unit_price?, note?}]；**unit_price 缺省自动按该委托方单价表带出**（表内无价则必须传）；`金额 = Σ(qty×unit_price)`；final_amount 单位「分」= 实际应收覆盖
-- `list_work_bills(client_id?: int, contact?: str, status?: str, from_date?: str, to_date?: str, account_id?: int, page?: int, page_size?: int)` — status ∈ {unsettled, partial, settled}（派生）；回显 `total` + 「已生效筛选」
+- `list_work_bills(client_id?: int, contact?: str, keyword?: str, status?: str, from_date?: str, to_date?: str, account_id?: int, page?: int, page_size?: int)` — status ∈ {unsettled, partial, settled}（派生）；`keyword`=地址或备注包含（多 token AND）；回显 `total` + 「已生效筛选」
 - `get_work_bill(bill_id: int)` — 完整明细 + 式子 + 应收/已收/欠款/状态
 - `update_work_bill(bill_id: int, client_id?: int, address?: str, contact?: str, occurred_at?: str, note?: str, final_amount?: int, items?: list)` — **items 全量替换**；final_amount=0 清除
 - `delete_work_bill(bill_id: int)` — 软删
 - `settle_work_bill(bill_id: int, amount: int, settled_at?: str, note?: str)` — amount 单位「分」**实收**（可多次/部分，与计算金额解耦）
 - `recalc_work_bills(bill_ids?: list, client_id?: int, from_date?: str, to_date?: str, apply?: bool=False)` — **改单价不自动级联**；默认 dry_run 预览 diff，apply=true 才提交；只重算未完全结算单（已结算锁定）
-- `export_work_bills(mode?: str="summary", client_id?: int, from_date?: str, to_date?: str, status?: str, account_id?: int, destination?: str="text", relative_path?: str, limit?: int=20)` — mode ∈ {summary=日常简版, statement=结账版（含计算式子）}；destination 四模式同 export_bills；后端 `GET /api/v1/work-bills/export`
+- `export_work_bills(mode?: str="summary", client_id?: int, keyword?: str, from_date?: str, to_date?: str, status?: str, account_id?: int, destination?: str="text", relative_path?: str, limit?: int=20)` — mode ∈ {summary=日常简版, statement=结账版（含计算式子）}；`keyword`=地址或备注包含；destination 四模式同 export_bills；后端 `GET /api/v1/work-bills/export`
+- `work_bill_stats(year?: int, month?: int, from_date?: str, to_date?: str, client_id?: int, status?: str, account_id?: int, chart?: bool=False)` — 区间统计 `GET /api/v1/work-bills/stats`：合计应收/已收/欠款 + 按委托方（欠款降序）+ 按月份；`chart=True` 时 matplotlib 渲染「按委托方欠款 + 按月应收/已收」PNG 发送（单位元）
 
 ### 订阅/新闻域
 - `subscribe_source(source_type: str, name?: str, source_url?: str, preset_key?: str)` — source_type ∈ {rss, preset}
@@ -156,7 +158,7 @@
 
 ## 4. 新工具开发约定（写进本地文档）
 
-- 新增工具**先确认不与上表 49 个重名**（含语义相同仅改名的，如已有 `add_bill` 就别再写 `record_bill`/`log_expense`）。
+- 新增工具**先确认不与上表 50 个重名**（含语义相同仅改名的，如已有 `add_bill` 就别再写 `record_bill`/`log_expense`）。
 - 每个工具 = `@filter.llm_tool(name="...")` + async 方法 + **带 Args 的 docstring**（AstrBot 用 docstring 生成 LLM 工具描述，参数名/类型/单位/枚举都要写清楚）。
 - 走 `self._api(method, path, identity=self._identity(event), json_body=...)`，统一错误返回为失败字典。
 - 工具描述里写明行为约定（如 add_bill 的 AA 规则、participants 格式），LLM 靠描述触发正确调用。

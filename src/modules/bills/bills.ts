@@ -640,7 +640,7 @@ export function billStatsRange(db: Database.Database, accountId: number, q: Stat
 }
 
 /** 推导统计区间为 YYYY-MM-DD 边界（可 null = 不限）。from/to 显式优先，其次 year/month，无则全量。 */
-function resolveStatsRange(q: StatsRangeQuery): { from: string | null; to: string | null } {
+export function resolveStatsRange(q: StatsRangeQuery): { from: string | null; to: string | null } {
   if (q.from || q.to) {
     if (q.from && !/^\d{4}-\d{2}-\d{2}$/.test(q.from)) throw new AppError(400, 'INVALID_FROM', 'from 需为 YYYY-MM-DD');
     if (q.to && !/^\d{4}-\d{2}-\d{2}$/.test(q.to)) throw new AppError(400, 'INVALID_TO', 'to 需为 YYYY-MM-DD');

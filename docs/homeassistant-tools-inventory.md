@@ -1,7 +1,7 @@
 # 家庭信息助理 · AstrBot 插件 LLM 工具清单（实测）
 
 > 来源：云端运行态 `/opt/homeassistant/plugins/astrbot_star_homeassistant/main.py`
-> 整理日期：2026-08-15（2026-08-16 同步到 42 个：方向 A 新增 bill_stats / export_bills；方向 B 新增 save_uploaded_file / parse_bills_file / import_bills / delete_file；**2026-08-17 调整为 40 个**：移除记忆域 remember/search_memory/forget，新增待办导出 export_tasks；**2026-08-18 新增 15 个 work_* 工具 → 55 个，随后删除 6 个旧查询工具 → 49 个，再新增 work_bill_stats → 50 个，随后恢复 list_bill_trash/restore_bill → 52 个**：工作账单域 + 移除 list_bills/get_bill/query_bill_stats/query_bill_changes（已被 bill_stats/export_bills 等替代）+ 恢复回收站两工具 + keyword 搜索/统计/日报/WEB 页面）
+> 整理日期：2026-08-15（2026-08-16 同步到 42 个：方向 A 新增 bill_stats / export_bills；方向 B 新增 save_uploaded_file / parse_bills_file / import_bills / delete_file；**2026-08-17 调整为 40 个**：移除记忆域 remember/search_memory/forget，新增待办导出 export_tasks；**2026-08-18 新增 15 个 work_* 工具 → 55 个，随后删除 6 个旧查询工具 → 49 个，再新增 work_bill_stats → 50 个，随后恢复 list_bill_trash/restore_bill → 52 个，随后回收站补全 + 批量结算 → 60 个**：工作账单域 + 移除 list_bills/get_bill/query_bill_stats/query_bill_changes（已被 bill_stats/export_bills 等替代）+ 恢复回收站两工具 + tasks/work_bills 回收站补全（trash/restore/purge）+ 批量结算 + keyword 搜索/统计/日报/WEB 页面）
 > 用途：本地设计文档的权威对照。**新增工具不得与下表重名/同义**；本地要加新工具时，先在文档里追加条目再开发，避免云端部署时撞名。
 
 ## 0. 插件骨架（非工具，但契约相关）

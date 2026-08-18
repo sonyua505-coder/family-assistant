@@ -381,6 +381,14 @@ export function listTrash(db: Database.Database, accountId: number): BillRow[] {
     .all(accountId) as BillRow[];
 }
 
+/** 彻底删除（硬删，仅回收站内，不可恢复）。返回被删账单。 */
+export function purgeBill(db: Database.Database, billId: number): BillRow | undefined {
+  const bill = getBillAny(db, billId);
+  if (!bill || bill.is_deleted !== 1) return undefined;
+  db.prepare('DELETE FROM bills WHERE id = ?').run(billId);
+  return bill;
+}
+
 export interface SettleInput {
   participantName?: string; // 结算某一位
   all?: boolean;            // 全部结清

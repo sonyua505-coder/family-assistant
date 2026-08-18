@@ -1,0 +1,65 @@
+<h1>📊 工作统计</h1>
+
+<% if (accounts.length === 0) { %>
+  <div class="empty">还没有账本。</div>
+<% } else { %>
+
+<form class="toolbar" method="get" action="/w/<%= token %>/work/stats">
+  <select name="account_id">
+    <% accounts.forEach(function(a){ %>
+      <option value="<%= a.id %>" <%= a.id === accountId ? 'selected' : '' %>><%= a.name %></option>
+    <% }) %>
+  </select>
+  <input type="date" name="from" value="<%= from %>">
+  <input type="date" name="to" value="<%= to %>">
+  <button>查看</button>
+</form>
+
+<div class="stat-row">
+  <div class="stat balance"><div class="label">📋 账单数</div><div class="value"><%= billCount %></div></div>
+  <div class="stat income"><div class="label">💵 应收</div><div class="value"><%= receivable %> 元</div></div>
+  <div class="stat expense"><div class="label">💰 已收</div><div class="value expense"><%= paid %> 元</div></div>
+  <div class="stat mom"><div class="label">📉 欠款</div><div class="value <%= owedClass %>"><%= owed %> 元</div></div>
+</div>
+
+<div class="card">
+  <h2>🏢 按委托方</h2>
+  <% if (byClient.length === 0) { %><div class="empty">暂无数据</div><% } else { %>
+  <div class="table-wrap">
+  <table>
+    <tr><th>委托方</th><th class="num">单数</th><th class="num">应收</th><th class="num">已收</th><th class="num">欠款</th></tr>
+    <% byClient.forEach(function(c){ %>
+    <tr>
+      <td><%= c.client_name %></td>
+      <td class="num"><%= c.bill_count %></td>
+      <td class="num amount"><%= c.receivable %></td>
+      <td class="num amount income"><%= c.paid %></td>
+      <td class="num amount <%= c.owed_class %>"><%= c.owed %></td>
+    </tr>
+    <% }) %>
+  </table>
+  </div>
+  <% } %>
+</div>
+
+<div class="card">
+  <h2>📅 按月份</h2>
+  <% if (byMonth.length === 0) { %><div class="empty">暂无数据</div><% } else { %>
+  <div class="table-wrap">
+  <table>
+    <tr><th>月份</th><th class="num">单数</th><th class="num">应收</th><th class="num">已收</th><th class="num">欠款</th></tr>
+    <% byMonth.forEach(function(m){ %>
+    <tr>
+      <td><%= m.month %></td>
+      <td class="num"><%= m.bill_count %></td>
+      <td class="num amount"><%= m.receivable %></td>
+      <td class="num amount income"><%= m.paid %></td>
+      <td class="num amount"><%= m.owed %></td>
+    </tr>
+    <% }) %>
+  </table>
+  </div>
+  <% } %>
+</div>
+
+<% } %>

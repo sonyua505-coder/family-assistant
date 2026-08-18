@@ -1,4 +1,4 @@
-<h1>工作记账</h1>
+<h1><%= trash ? '回收站 · 工作记账' : '工作记账' %></h1>
 
 <% if (error) { %><div class="error"><%= error %></div><% } %>
 
@@ -12,10 +12,16 @@
       <option value="<%= a.id %>" <%= a.id === accountId ? 'selected' : '' %>><%= a.name %></option>
     <% }) %>
   </select>
+  <% if (trash) { %>
+    <input type="hidden" name="trash" value="1">
+  <% } %>
   <button>切换账本</button>
+  <a href="/w/<%= token %>/work/stats?account_id=<%= accountId %>"><button class="ghost">📊 统计</button></a>
+  <a href="/w/<%= token %>/work/export?account_id=<%= accountId %>"><button class="ghost">⬇️ 导出</button></a>
+  <a href="/w/<%= token %>/work?account_id=<%= accountId %><%= trash ? '' : '&trash=1' %>"><button class="ghost" style="margin-left:auto"><%= trash ? '⬅ 返回工作记账' : '🗑️ 回收站' %></button></a>
 </form>
 
-<% if (mode === 'write') { %>
+<% if (!trash && mode === 'write') { %>
 <div class="card">
   <h2>新建工作账单</h2>
   <form method="post" action="/w/<%= token %>/work">
@@ -47,7 +53,28 @@
 <% } %>
 
 <% if (items.length === 0) { %>
-  <div class="empty">暂无工作账单</div>
+  <div class="empty"><%= trash ? '回收站为空。' : '暂无工作账单' %></div>
+<% } else if (trash) { %>
+<div class="table-wrap">
+<table>
+<tr><th>日期</th><th>委托方</th><th>地点</th><th>联系人</th><th>删除时间</th><% if (mode === 'write') { %><th>操作</th><% } %></tr>
+<% items.forEach(function(b){ %>
+<tr>
+  <td style="white-space:nowrap"><%= b.occurred_at %></td>
+  <td><%= b.client_name %></td>
+  <td class="muted"><%= b.address %></td>
+  <td class="muted"><%= b.contact %></td>
+  <td class="muted" style="white-space:nowrap"><%= b.deleted_at %></td>
+  <% if (mode === 'write') { %>
+  <td style="white-space:nowrap">
+    <form class="inline" method="post" action="/w/<%= token %>/work/<%= b.id %>/restore"><button>♻️ 恢复</button></form>
+    <form class="inline" method="post" action="/w/<%= token %>/work/<%= b.id %>/purge"><button class="danger" title="彻底删除（不可恢复，明细/结算一并清除）">🗑️ 彻底删</button></form>
+  </td>
+  <% } %>
+</tr>
+<% }) %>
+</table>
+</div>
 <% } else { %>
 <div class="table-wrap">
 <table>
@@ -64,6 +91,7 @@
   <td style="white-space:nowrap"><span class="badge <%= b.status === 'settled' ? 'settled' : 'pending' %>"><%= b.status === 'settled' ? '✅ 已结清' : b.status === 'partial' ? '🕐 部分结算' : '⏳ 未结算' %></span></td>
   <% if (mode === 'write') { %>
   <td style="white-space:nowrap">
+    <a href="/w/<%= token %>/work/<%= b.id %>/edit"><button class="ghost" title="编辑">✏️</button></a>
     <% if (b.status !== 'settled') { %>
     <form class="inline" method="post" action="/w/<%= token %>/work/<%= b.id %>/settle">
       <input type="number" name="amount" min="0.01" step="0.01" placeholder="收款(元)" style="width:90px" required>

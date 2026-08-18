@@ -23,6 +23,7 @@ import {
   importBills,
   listBills,
   listTrash,
+  purgeBill,
   resolveAccountId,
   restoreBill,
   settleBill,
@@ -163,6 +164,19 @@ export async function registerBillsRoutes(app: FastifyInstance, deps: BillsRoute
     const after = restoreBill(db, billId)!;
     logBillOp(personId, 'bill.restore', billId, undefined, after);
     return { ok: true, bill: toOut(after) };
+  });
+
+  // ── 彻底删除（仅回收站内，不可恢复）──
+  app.delete('/api/v1/bills/:id/purge', { preHandler: requireBoundPerson }, async (req) => {
+    const personId = me(req);
+    const billId = requireIntId((req.params as { id: string }).id);
+    const bill = getBillAny(db, billId);
+    if (!bill) throw new AppError(404, 'BILL_NOT_FOUND', '账单不存在');
+    resolveAccountId(db, personId, bill.account_id);
+    if (bill.is_deleted !== 1) throw new AppError(400, 'NOT_DELETED', '该账单不在回收站，不能彻底删除');
+    purgeBill(db, billId);
+    logBillOp(personId, 'bill.purge', billId, bill, undefined);
+    return { ok: true, purged: true };
   });
 
   // ── 统计 ──

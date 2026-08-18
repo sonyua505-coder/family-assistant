@@ -6,7 +6,7 @@
  */
 import cron from 'node-cron';
 import type Database from 'better-sqlite3';
-import { runBillDigest, runDailyBrief, runNewsCleanup, runNewsFetch, runOutboxSweep, runReminderDue, runWorkDigest } from './tasks.js';
+import { runBillDigest, runDailyBrief, runNewsCleanup, runNewsFetch, runOutboxSweep, runReminderDue, runTrashCleanup, runWorkDigest } from './tasks.js';
 
 export interface SchedulerDeps {
   db: Database.Database;
@@ -65,6 +65,14 @@ export class Scheduler {
     // outbox 终态清理：每 10 分钟
     this.jobs.push(
       cron.schedule('*/10 * * * *', () => void safeRun('outbox_sweep', () => runOutboxSweep(this.db), this.log), opts),
+    );
+
+    // 回收站定时清空：每日凌晨 4 点硬删超期软删记录（retention 可配）
+    this.jobs.push(
+      cron.schedule('0 4 * * *', () => safeRun('trash_cleanup', () => {
+        const c = runTrashCleanup(this.db);
+        return c.bills + c.tasks + c.work_bills + c.work_clients;
+      }, this.log), opts),
     );
 
     // 订阅抓取：每 6 小时（异步，单订阅失败不中断）

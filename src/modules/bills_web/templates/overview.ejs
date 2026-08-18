@@ -26,6 +26,14 @@
           <div class="label">📈 支出环比上月</div>
           <div class="value <%= a.momClass %>"><%= a.momClass === 'up' ? '▲' : (a.momClass === 'down' ? '▼' : '') %> <%= a.momText %></div>
         </div>
+        <div class="stat mom">
+          <div class="label">✅ 未完成待办</div>
+          <div class="value"><%= a.pendingTasks %></div>
+        </div>
+        <div class="stat mom">
+          <div class="label">🔨 工作欠款</div>
+          <div class="value <%= a.workOwedClass %>"><%= a.workOwed %> 元</div>
+        </div>
       </div>
 
       <% if (a.topCategories.length > 0) { %>
@@ -38,6 +46,8 @@
 
       <div class="toolbar">
         <a href="/w/<%= token %>/bills?account_id=<%= a.id %>"><button class="ghost">🧾 账单</button></a>
+        <a href="/w/<%= token %>/tasks?account_id=<%= a.id %>"><button class="ghost">✅ 待办</button></a>
+        <a href="/w/<%= token %>/work?account_id=<%= a.id %>"><button class="ghost">🔨 工作</button></a>
         <a href="/w/<%= token %>/stats?account_id=<%= a.id %>"><button class="ghost">📈 统计</button></a>
         <a href="/w/<%= token %>/aa?account_id=<%= a.id %>"><button class="ghost">💰 待收</button></a>
         <a href="/w/<%= token %>/export?account_id=<%= a.id %>"><button class="ghost">⬇️ 导出</button></a>

@@ -256,6 +256,37 @@ function formatWorkDigest(date: string, changes: WorkDailyChange[]): string {
   return has ? lines.join('\n') : '';
 }
 
+// ── 任务：回收站定时清空（trash_cleanup，每日 settings.trash_retention_days 保留期）──
+
+/**
+ * 硬删回收站中超过保留期（trash_retention_days，默认 30；设 0 立即清空）的软删记录。
+ * 覆盖 bills / tasks / work_bills（先清子表）/ work_clients；仅动 is_deleted=1 且超期记录，事务包裹。
+ * 返回各表删除条数。
+ */
+export function runTrashCleanup(db: Database.Database): { bills: number; tasks: number; work_bills: number; work_clients: number } {
+  let retention = Number(getSettingDefault(db, 'trash_retention_days', '30'));
+  if (!Number.isFinite(retention) || retention < 0) retention = 30;
+  const cutoff = (db.prepare("SELECT datetime('now','localtime', ?) AS c").get(`-${Math.floor(retention)} days`) as { c: string }).c;
+
+  const counts = { bills: 0, tasks: 0, work_bills: 0, work_clients: 0 };
+  const run = db.transaction(() => {
+    counts.bills = db.prepare('DELETE FROM bills WHERE is_deleted = 1 AND deleted_at < ?').run(cutoff).changes;
+    counts.tasks = db.prepare('DELETE FROM tasks WHERE is_deleted = 1 AND deleted_at < ?').run(cutoff).changes;
+
+    const wbIds = (db.prepare('SELECT id FROM work_bills WHERE is_deleted = 1 AND deleted_at < ?').all(cutoff) as { id: number }[]).map((r) => r.id);
+    if (wbIds.length > 0) {
+      const placeholders = wbIds.map(() => '?').join(',');
+      db.prepare(`DELETE FROM work_bill_items WHERE bill_id IN (${placeholders})`).run(...wbIds);
+      db.prepare(`DELETE FROM work_settlements WHERE bill_id IN (${placeholders})`).run(...wbIds);
+      counts.work_bills = db.prepare(`DELETE FROM work_bills WHERE id IN (${placeholders})`).run(...wbIds).changes;
+    }
+
+    counts.work_clients = db.prepare('DELETE FROM work_clients WHERE is_deleted = 1 AND deleted_at < ?').run(cutoff).changes;
+  });
+  run();
+  return counts;
+}
+
 // ── 任务：每日简报（daily_brief，每日 settings.daily_brief_time，默认 09:00）──
 
 /**

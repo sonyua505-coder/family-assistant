@@ -14,7 +14,11 @@ import {
   createTask,
   exportTasks,
   getTask,
+  getTaskAny,
   listTasks,
+  listTaskTrash,
+  purgeTask,
+  restoreTask,
   setTaskDone,
   softDeleteTask,
   updateTask,
@@ -142,10 +146,50 @@ export async function registerTasksRoutes(app: FastifyInstance, deps: TasksRoute
     return { ok: true, deleted: true };
   });
 
+  // ── 回收站（软删后可查看/恢复/彻底删除）──
+
+  app.get('/api/v1/tasks/trash', { preHandler: requireBoundPerson }, async (req) => {
+    const personId = me(req);
+    const q = req.query as Record<string, string | undefined>;
+    const accountId = resolveAccountId(db, personId, num(q.account_id));
+    return { items: listTaskTrash(db, accountId) };
+  });
+
+  app.post('/api/v1/tasks/:id/restore', { preHandler: requireBoundPerson }, async (req) => {
+    const personId = me(req);
+    const id = requireIntId(req);
+    const task = getTaskAny(db, id);
+    if (!task) throw new AppError(404, 'TASK_NOT_FOUND', '任务不存在');
+    resolveAccountId(db, personId, task.account_id); // 越权 403
+    if (task.is_deleted !== 1) throw new AppError(400, 'NOT_DELETED', '该任务不在回收站');
+    const after = restoreTask(db, id)!;
+    logOperation(db, { personId, accountId: task.account_id, action: 'task.restore', entity: 'tasks', entityId: id, after });
+    return { ok: true, task: after };
+  });
+
+  // 彻底删除（仅回收站内，不可恢复）
+  app.delete('/api/v1/tasks/:id/purge', { preHandler: requireBoundPerson }, async (req) => {
+    const personId = me(req);
+    const id = requireIntId(req);
+    const task = getTaskAny(db, id);
+    if (!task) throw new AppError(404, 'TASK_NOT_FOUND', '任务不存在');
+    resolveAccountId(db, personId, task.account_id); // 越权 403
+    if (task.is_deleted !== 1) throw new AppError(400, 'NOT_DELETED', '该任务不在回收站，不能彻底删除');
+    purgeTask(db, id);
+    logOperation(db, { personId, accountId: task.account_id, action: 'task.purge', entity: 'tasks', entityId: id, before: task });
+    return { ok: true, purged: true };
+  });
+
   // ── 私有辅助 ──
 
   function num(v: unknown): number | undefined {
     return typeof v === 'string' && v !== '' ? Number(v) : undefined;
+  }
+
+  function requireIntId(req: FastifyRequest): number {
+    const id = Number((req.params as { id: string }).id);
+    if (!Number.isInteger(id) || id <= 0) throw new AppError(400, 'INVALID_ID', 'id 非法');
+    return id;
   }
 
   /** 取路由 :id 对应的一条未删除任务，并校验当前 person 对所在账户有访问权。 */

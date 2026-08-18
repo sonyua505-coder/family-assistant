@@ -1,4 +1,4 @@
-<h1>待办</h1>
+<h1><%= trash ? '回收站 · 待办' : '待办' %></h1>
 
 <% if (error) { %><div class="error"><%= error %></div><% } %>
 
@@ -12,10 +12,16 @@
       <option value="<%= a.id %>" <%= a.id === accountId ? 'selected' : '' %>><%= a.name %></option>
     <% }) %>
   </select>
+  <% if (trash) { %>
+    <input type="hidden" name="trash" value="1">
+  <% } %>
   <button>切换账本</button>
+  <a href="/w/<%= token %>/tasks/stats?account_id=<%= accountId %>"><button class="ghost">📊 统计</button></a>
+  <a href="/w/<%= token %>/tasks/export?account_id=<%= accountId %>"><button class="ghost">⬇️ 导出</button></a>
+  <a href="/w/<%= token %>/tasks?account_id=<%= accountId %><%= trash ? '' : '&trash=1' %>"><button class="ghost" style="margin-left:auto"><%= trash ? '⬅ 返回待办' : '🗑️ 回收站' %></button></a>
 </form>
 
-<% if (mode === 'write') { %>
+<% if (!trash && mode === 'write') { %>
 <div class="card">
   <h2>新增待办</h2>
   <form method="post" action="/w/<%= token %>/tasks">
@@ -31,7 +37,26 @@
 <% } %>
 
 <% if (items.length === 0) { %>
-  <div class="empty">暂无待办</div>
+  <div class="empty"><%= trash ? '回收站为空。' : '暂无待办' %></div>
+<% } else if (trash) { %>
+<div class="table-wrap">
+<table>
+<tr><th>内容</th><th>分类</th><th>删除时间</th><% if (mode === 'write') { %><th>操作</th><% } %></tr>
+<% items.forEach(function(t){ %>
+<tr>
+  <td><%= t.content %></td>
+  <td class="muted"><%= t.category %></td>
+  <td class="muted" style="white-space:nowrap"><%= t.deleted_at %></td>
+  <% if (mode === 'write') { %>
+  <td style="white-space:nowrap">
+    <form class="inline" method="post" action="/w/<%= token %>/tasks/<%= t.id %>/restore"><button>♻️ 恢复</button></form>
+    <form class="inline" method="post" action="/w/<%= token %>/tasks/<%= t.id %>/purge"><button class="danger" title="彻底删除（不可恢复）">🗑️ 彻底删</button></form>
+  </td>
+  <% } %>
+</tr>
+<% }) %>
+</table>
+</div>
 <% } else { %>
 <div class="table-wrap">
 <table>
@@ -44,6 +69,7 @@
   <td class="muted" style="white-space:nowrap"><%= t.remind_at %></td>
   <% if (mode === 'write') { %>
   <td style="white-space:nowrap">
+    <a href="/w/<%= token %>/tasks/<%= t.id %>/edit"><button class="ghost" title="编辑">✏️</button></a>
     <% if (!t.is_done) { %>
       <form class="inline" method="post" action="/w/<%= token %>/tasks/<%= t.id %>/done"><button title="完成">✅ 完成</button></form>
     <% } else { %>

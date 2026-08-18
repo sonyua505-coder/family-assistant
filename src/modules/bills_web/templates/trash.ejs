@@ -31,6 +31,9 @@
     <form class="inline" method="post" action="/w/<%= token %>/bills/<%= b.id %>/restore">
       <button>♻️ 恢复</button>
     </form>
+    <form class="inline" method="post" action="/w/<%= token %>/bills/<%= b.id %>/purge">
+      <button class="danger" title="彻底删除（不可恢复）">🗑️ 彻底删</button>
+    </form>
   </td>
   <% } %>
 </tr>

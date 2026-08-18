@@ -582,6 +582,18 @@ class HomeAssistantStar(Star):
             f"（{b.get('category') or '未分类'}）"
         )
 
+    @filter.llm_tool(name="purge_bill")
+    async def purge_bill(self, event: AstrMessageEvent, bill_id: int) -> str:
+        """彻底删除回收站里的一笔账单（**不可恢复**，仅限已 delete_bill 进回收站的账单）。
+
+        Args:
+            bill_id(number): 账单 id（须先在回收站）。
+        """
+        data = await self._api("DELETE", f"api/v1/bills/{bill_id}/purge", identity=self._identity(event))
+        if not data.get("ok", True):
+            return self._err_msg(data)
+        return f"已彻底删除账单#{bill_id}（不可恢复）。"
+
     @staticmethod
     def _normalize_participants(participants: list) -> list:
         """把 LLM 可能给出的 ["张三","李四"] 或 [{"name":"张三"}] 归一成 API 需要的 [{"name":...}]。"""
@@ -800,7 +812,55 @@ class HomeAssistantStar(Star):
         )
         if not data.get("ok", True):
             return f"删除失败：{data.get('body') or data.get('error') or data}"
-        return f"已删除事项#{task_id}。"
+        return f"已删除事项#{task_id}（软删除进了回收站，可 list_task_trash 查看、restore_task 恢复）。"
+
+    @filter.llm_tool(name="list_task_trash")
+    async def list_task_trash(self, event: AstrMessageEvent, account_id: int = None) -> str:
+        """列出回收站里的待办（软删除、尚未恢复的，按删除时间倒序）。
+
+        Args:
+            account_id(number): 归属账户 id（有多个账本时必须指定）。
+        """
+        params = {}
+        if account_id:
+            params["account_id"] = account_id
+        qs = urlencode(params)
+        data = await self._api("GET", f"api/v1/tasks/trash?{qs}", identity=self._identity(event))
+        if not data.get("ok", True):
+            return self._err_msg(data)
+        items = data.get("items") or []
+        if not items:
+            return "回收站是空的。"
+        lines = [
+            f"#{it.get('id')} {it.get('content')}（删除于 {str(it.get('deleted_at') or '')[:10]}）"
+            for it in items[:20]
+        ]
+        return "回收站待办（可用 restore_task 恢复、purge_task 彻底删除）:\n" + "\n".join(lines)
+
+    @filter.llm_tool(name="restore_task")
+    async def restore_task(self, event: AstrMessageEvent, task_id: int) -> str:
+        """从回收站恢复一条待办（软删除可反悔）。
+
+        Args:
+            task_id(number): 待办 id（来自 delete_task 的 #id 或 list_task_trash 列表）。
+        """
+        data = await self._api("POST", f"api/v1/tasks/{task_id}/restore", identity=self._identity(event))
+        if not data.get("ok", True):
+            return self._err_msg(data)
+        t = data.get("task") or {}
+        return f"已恢复待办 #{t.get('id')}：{t.get('content')}"
+
+    @filter.llm_tool(name="purge_task")
+    async def purge_task(self, event: AstrMessageEvent, task_id: int) -> str:
+        """彻底删除回收站里的一条待办（**不可恢复**，仅限已 delete_task 进回收站的待办）。
+
+        Args:
+            task_id(number): 待办 id（须先在回收站）。
+        """
+        data = await self._api("DELETE", f"api/v1/tasks/{task_id}/purge", identity=self._identity(event))
+        if not data.get("ok", True):
+            return self._err_msg(data)
+        return f"已彻底删除待办#{task_id}（不可恢复）。"
 
     @filter.llm_tool(name="export_tasks")
     async def export_tasks(
@@ -1330,7 +1390,55 @@ class HomeAssistantStar(Star):
         data = await self._api("DELETE", f"api/v1/work-bills/{bill_id}", identity=self._identity(event))
         if not data.get("ok", True):
             return self._err_msg(data)
-        return f"已删除工作账单 #{bill_id}。"
+        return f"已删除工作账单 #{bill_id}（软删除进了回收站，可 list_work_bill_trash 查看、restore_work_bill 恢复）。"
+
+    @filter.llm_tool(name="list_work_bill_trash")
+    async def list_work_bill_trash(self, event: AstrMessageEvent, account_id: int = None) -> str:
+        """列出回收站里的工作账单（软删除、尚未恢复的，按删除时间倒序）。
+
+        Args:
+            account_id(number): 归属账户 id（有多个账本时必须指定）。
+        """
+        params = {}
+        if account_id:
+            params["account_id"] = account_id
+        qs = urlencode(params)
+        data = await self._api("GET", f"api/v1/work-bills/trash?{qs}", identity=self._identity(event))
+        if not data.get("ok", True):
+            return self._err_msg(data)
+        items = data.get("items") or []
+        if not items:
+            return "回收站是空的。"
+        lines = [
+            f"#{it.get('id')} {it.get('occurred_at')} 委托方#{it.get('client_id')} {it.get('address') or ''}（删除于 {str(it.get('deleted_at') or '')[:10]}）"
+            for it in items[:20]
+        ]
+        return "回收站工作账单（可用 restore_work_bill 恢复、purge_work_bill 彻底删除）:\n" + "\n".join(lines)
+
+    @filter.llm_tool(name="restore_work_bill")
+    async def restore_work_bill(self, event: AstrMessageEvent, bill_id: int) -> str:
+        """从回收站恢复一张工作账单（软删除可反悔）。
+
+        Args:
+            bill_id(number): 工作账单 id（来自 delete_work_bill 的 #id 或 list_work_bill_trash 列表）。
+        """
+        data = await self._api("POST", f"api/v1/work-bills/{bill_id}/restore", identity=self._identity(event))
+        if not data.get("ok", True):
+            return self._err_msg(data)
+        b = data.get("bill") or {}
+        return f"已恢复工作账单 #{b.get('id')}（{b.get('occurred_at')}）"
+
+    @filter.llm_tool(name="purge_work_bill")
+    async def purge_work_bill(self, event: AstrMessageEvent, bill_id: int) -> str:
+        """彻底删除回收站里的一张工作账单（**不可恢复**，仅限已 delete_work_bill 进回收站的账单，明细/结算一并清除）。
+
+        Args:
+            bill_id(number): 工作账单 id（须先在回收站）。
+        """
+        data = await self._api("DELETE", f"api/v1/work-bills/{bill_id}/purge", identity=self._identity(event))
+        if not data.get("ok", True):
+            return self._err_msg(data)
+        return f"已彻底删除工作账单#{bill_id}（不可恢复）。"
 
     @filter.llm_tool(name="settle_work_bill")
     async def settle_work_bill(
@@ -1358,6 +1466,38 @@ class HomeAssistantStar(Star):
         if not data.get("ok", True):
             return self._err_msg(data)
         return f"已记录结算 {amount} 分。\n" + self._fmt_work_bill(data.get("bill") or {})
+
+    @filter.llm_tool(name="settle_work_bills")
+    async def settle_work_bills(
+        self,
+        event: AstrMessageEvent,
+        bill_ids: list,
+        amount: int,
+        note: str = None,
+        account_id: int = None,
+    ) -> str:
+        """批量结算：按给定的账单组（bill_ids 顺序）收一笔款冲抵这几张未结工作账单。只结算指定的单，不会动其它单。
+
+        Args:
+            bill_ids(list): 要结算的账单 id 数组（必填，按此顺序冲抵；已结清的单自动跳过）。
+            amount(number): 本次收款金额（单位：分，1 元 = 100 分）。
+            note(string): 备注（可选）。
+            account_id(number): 归属账户 id（有多个账本时必须指定）。
+        """
+        body = {"bill_ids": bill_ids, "amount": amount}
+        if note is not None:
+            body["note"] = note
+        qs = f"?account_id={account_id}" if account_id else ""
+        data = await self._api("POST", f"api/v1/work-bills/settle-batch{qs}", identity=self._identity(event), json_body=body)
+        if not data.get("ok", True):
+            return self._err_msg(data)
+        applied = data.get("applied") or []
+        if not applied:
+            return "这批账单没有可冲抵的欠款（可能已结清或金额不足）。"
+        lines = [f"批量结算 {data.get('total_applied', 0)} 分（剩余未冲 {data.get('remaining', 0)} 分）："]
+        for a in applied[:20]:
+            lines.append(f"- 账单#{a.get('bill_id')} 冲 {a.get('applied', 0)} 分（欠 {a.get('owed_before', 0)} → 余 {a.get('owed_after', 0)} 分）")
+        return "\n".join(lines)
 
     @filter.llm_tool(name="recalc_work_bills")
     async def recalc_work_bills(

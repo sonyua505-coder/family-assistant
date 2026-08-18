@@ -15,12 +15,17 @@ import {
   deleteUnitPrice,
   exportWorkBills,
   getClient,
+  getWorkBillAny,
   getWorkBillLedger,
   listClients,
   listUnitPrices,
+  listWorkBillTrash,
   listWorkBills,
+  purgeWorkBill,
+  restoreWorkBill,
   recalcWorkBills,
   settleWorkBill,
+  settleWorkBillsBatch,
   softDeleteClient,
   softDeleteWorkBill,
   updateClient,
@@ -182,6 +187,38 @@ export async function registerWorkBillsRoutes(app: FastifyInstance, deps: WorkBi
     return { ok: true, deleted: true };
   });
 
+  // ── 回收站（软删后可查看/恢复/彻底删除）──
+
+  app.get('/api/v1/work-bills/trash', { preHandler: requireBoundPerson }, async (req) => {
+    const accountId = resolveAccountId(db, me(req), num(qs(req).account_id));
+    return { items: listWorkBillTrash(db, accountId) };
+  });
+
+  app.post('/api/v1/work-bills/:id/restore', { preHandler: requireBoundPerson }, async (req) => {
+    const personId = me(req);
+    const id = requireIntId(req);
+    const bill = getWorkBillAny(db, id);
+    if (!bill) throw new AppError(404, 'WORK_BILL_NOT_FOUND', '账单不存在');
+    resolveAccountId(db, personId, bill.account_id); // 越权 403
+    if (bill.is_deleted !== 1) throw new AppError(400, 'NOT_DELETED', '该账单不在回收站');
+    const after = restoreWorkBill(db, id)!;
+    logOperation(db, { personId, accountId: bill.account_id, action: 'work_bill.restore', entity: 'work_bills', entityId: id, after });
+    return { ok: true, bill: after };
+  });
+
+  // 彻底删除（仅回收站内，不可恢复；先清明细/结算子表）
+  app.delete('/api/v1/work-bills/:id/purge', { preHandler: requireBoundPerson }, async (req) => {
+    const personId = me(req);
+    const id = requireIntId(req);
+    const bill = getWorkBillAny(db, id);
+    if (!bill) throw new AppError(404, 'WORK_BILL_NOT_FOUND', '账单不存在');
+    resolveAccountId(db, personId, bill.account_id); // 越权 403
+    if (bill.is_deleted !== 1) throw new AppError(400, 'NOT_DELETED', '该账单不在回收站，不能彻底删除');
+    purgeWorkBill(db, id);
+    logOperation(db, { personId, accountId: bill.account_id, action: 'work_bill.purge', entity: 'work_bills', entityId: id, before: bill });
+    return { ok: true, purged: true };
+  });
+
   // 结算：记一笔实收（可多次、可部分；与计算金额解耦）
   app.post('/api/v1/work-bills/:id/settle', { preHandler: requireBoundPerson }, async (req) => {
     const personId = me(req);
@@ -191,6 +228,22 @@ export async function registerWorkBillsRoutes(app: FastifyInstance, deps: WorkBi
     const updated = settleWorkBill(db, id, { amount: body.amount, settled_at: body.settled_at, note: body.note })!;
     logOperation(db, { personId, accountId: full.bill.account_id, action: 'work_settlement.create', entity: 'work_settlements', entityId: id, after: updated.bill });
     return { ok: true, bill: updated };
+  });
+
+  // 批量结算：按给定账单 ID 组（bill_ids 顺序）收一笔款冲抵这几张未结单
+  app.post('/api/v1/work-bills/settle-batch', { preHandler: requireBoundPerson }, async (req) => {
+    const personId = me(req);
+    const accountId = resolveAccountId(db, personId, num(qs(req).account_id));
+    const body = req.body as Record<string, unknown>;
+    const result = settleWorkBillsBatch(db, accountId, {
+      bill_ids: Array.isArray(body.bill_ids) ? (body.bill_ids as unknown[]) : [],
+      amount: body.amount,
+      note: typeof body.note === 'string' ? body.note : undefined,
+    });
+    for (const a of result.applied) {
+      logOperation(db, { personId, accountId, action: 'work_settlement.create', entity: 'work_settlements', entityId: a.bill_id, after: { batch: true, applied: a.applied } });
+    }
+    return { ok: true, ...result };
   });
 
   // 批量重算未结算单（纯手动；dry_run 默认 true=预览，dry_run=0 才提交）

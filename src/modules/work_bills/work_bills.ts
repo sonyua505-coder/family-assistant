@@ -445,6 +445,39 @@ export function softDeleteWorkBill(db: Database.Database, id: number): WorkBillR
   return full.bill;
 }
 
+/** 取一张工作账单（无视删除状态，回收站恢复/彻底删除用）。 */
+export function getWorkBillAny(db: Database.Database, id: number): WorkBillRow | undefined {
+  return db.prepare('SELECT * FROM work_bills WHERE id = ?').get(id) as WorkBillRow | undefined;
+}
+
+/** 回收站列表（该账户内已软删除的工作账单，按删除时间倒序）。 */
+export function listWorkBillTrash(db: Database.Database, accountId: number): WorkBillRow[] {
+  return db
+    .prepare('SELECT * FROM work_bills WHERE account_id = ? AND is_deleted = 1 ORDER BY deleted_at DESC, id DESC')
+    .all(accountId) as WorkBillRow[];
+}
+
+/** 从回收站恢复。返回恢复后的账单快照（is_deleted=0）。 */
+export function restoreWorkBill(db: Database.Database, id: number): WorkBillRow | undefined {
+  const bill = getWorkBillAny(db, id);
+  if (!bill || bill.is_deleted !== 1) return undefined;
+  db.prepare('UPDATE work_bills SET is_deleted = 0, deleted_at = NULL WHERE id = ?').run(id);
+  return getWorkBillAny(db, id)!;
+}
+
+/** 彻底删除（硬删，仅回收站内，不可恢复）。先清明细/结算子表（外键），再删主表。 */
+export function purgeWorkBill(db: Database.Database, id: number): WorkBillRow | undefined {
+  const bill = getWorkBillAny(db, id);
+  if (!bill || bill.is_deleted !== 1) return undefined;
+  const run = db.transaction(() => {
+    db.prepare('DELETE FROM work_bill_items WHERE bill_id = ?').run(id);
+    db.prepare('DELETE FROM work_settlements WHERE bill_id = ?').run(id);
+    db.prepare('DELETE FROM work_bills WHERE id = ?').run(id);
+  });
+  run();
+  return bill;
+}
+
 // ── 列表 / 导出 ──
 
 /** 派生表片段：每单 computed_total / paid（内部复用，勿外拼不信任输入）。 */
@@ -829,6 +862,64 @@ export function settleWorkBill(db: Database.Database, id: number, input: { amoun
   const settledAt = normalizeDate(input.settled_at ?? today(), 'settled_at');
   db.prepare('INSERT INTO work_settlements (bill_id, amount, settled_at, note) VALUES (?, ?, ?, ?)').run(id, amount, settledAt, String(input.note ?? ''));
   return getWorkBillLedger(db, id);
+}
+
+export interface WorkBatchSettleResult {
+  total_applied: number;
+  remaining: number;
+  applied: Array<{ bill_id: number; applied: number; owed_before: number; owed_after: number }>;
+}
+
+/**
+ * 批量结算：按调用方给定的账单 ID 组（bill_ids 顺序）收一笔款冲抵这几张未结账单。
+ * 只结算指定单（须同账户、可见），不会动其它单——避免误结算。
+ * 每单插入一条 work_settlements（日期=今天）；已结清/无欠款跳过；事务包裹。
+ * 返回冲抵明细与剩余未冲金额。
+ */
+export function settleWorkBillsBatch(
+  db: Database.Database,
+  accountId: number,
+  input: { bill_ids: unknown[]; amount: unknown; note?: unknown },
+): WorkBatchSettleResult {
+  if (!Array.isArray(input.bill_ids) || input.bill_ids.length === 0) {
+    throw new AppError(400, 'INVALID_BODY', 'bill_ids 不能为空（需指定要结算的账单组）');
+  }
+  const amount = normalizeUnitPrice(input.amount);
+  if (amount <= 0) throw new AppError(400, 'INVALID_AMOUNT', '结算金额需大于 0（分）');
+
+  // 按 bill_ids 传入顺序取单（去重；只保留同账户可见单）
+  const bills: WorkBillRow[] = [];
+  const seen = new Set<number>();
+  for (const raw of input.bill_ids) {
+    const id = Number(raw);
+    if (!Number.isInteger(id) || id <= 0 || seen.has(id)) continue;
+    seen.add(id);
+    const bill = getWorkBillAny(db, id);
+    if (bill && bill.account_id === accountId) bills.push(bill);
+  }
+  if (bills.length === 0) throw new AppError(404, 'WORK_BILL_NOT_FOUND', '指定的账单不存在或无权访问');
+
+  const applied: WorkBatchSettleResult['applied'] = [];
+  let remaining = amount;
+  const run = db.transaction(() => {
+    for (const bill of bills) {
+      if (remaining <= 0) break;
+      const ledger = getWorkBillLedger(db, bill.id);
+      if (!ledger || ledger.owed <= 0) continue; // 已结清/无欠款跳过
+      const a = Math.min(remaining, ledger.owed);
+      db.prepare('INSERT INTO work_settlements (bill_id, amount, settled_at, note) VALUES (?, ?, ?, ?)').run(
+        bill.id,
+        a,
+        today(),
+        String(input.note ?? ''),
+      );
+      applied.push({ bill_id: bill.id, applied: a, owed_before: ledger.owed, owed_after: ledger.owed - a });
+      remaining -= a;
+    }
+  });
+  run();
+
+  return { total_applied: amount - remaining, remaining, applied };
 }
 
 // ── 批量重算（纯手动；改单价表不自动级联）──

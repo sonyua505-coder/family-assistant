@@ -246,3 +246,31 @@ export function softDeleteTask(db: Database.Database, id: number): TaskRow | und
   db.prepare('UPDATE tasks SET is_deleted = 1, deleted_at = ? WHERE id = ?').run(now(), id);
   return task;
 }
+
+/** 取一条任务（无视删除状态，回收站恢复/彻底删除用）。 */
+export function getTaskAny(db: Database.Database, id: number): TaskRow | undefined {
+  return db.prepare('SELECT * FROM tasks WHERE id = ?').get(id) as TaskRow | undefined;
+}
+
+/** 回收站列表（该账户内已软删除的任务，按删除时间倒序）。 */
+export function listTaskTrash(db: Database.Database, accountId: number): TaskRow[] {
+  return db
+    .prepare('SELECT * FROM tasks WHERE account_id = ? AND is_deleted = 1 ORDER BY deleted_at DESC, id DESC')
+    .all(accountId) as TaskRow[];
+}
+
+/** 从回收站恢复。返回恢复后的任务快照（is_deleted=0）。 */
+export function restoreTask(db: Database.Database, id: number): TaskRow | undefined {
+  const task = getTaskAny(db, id);
+  if (!task || task.is_deleted !== 1) return undefined;
+  db.prepare('UPDATE tasks SET is_deleted = 0, deleted_at = NULL WHERE id = ?').run(id);
+  return getTaskAny(db, id)!;
+}
+
+/** 彻底删除（硬删，仅回收站内，不可恢复）。返回被删任务。 */
+export function purgeTask(db: Database.Database, id: number): TaskRow | undefined {
+  const task = getTaskAny(db, id);
+  if (!task || task.is_deleted !== 1) return undefined;
+  db.prepare('DELETE FROM tasks WHERE id = ?').run(id);
+  return task;
+}

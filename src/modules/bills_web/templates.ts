@@ -26,9 +26,13 @@ export const tpl = {
   edit: load('edit.ejs'),
   tasks: load('tasks.ejs'),
   work: load('work.ejs'),
+  taskEdit: load('task_edit.ejs'),
+  workEdit: load('work_edit.ejs'),
+  taskStats: load('task_stats.ejs'),
+  workStats: load('work_stats.ejs'),
 };
 
-/** 渲染完整页面：子模板 → body（已转义），再套 layout。 */
+/** 渲染完整页面：子模板 → body（已转义），再套 layout。accountId 透传给 layout（nav 跨页保持账本）。 */
 export function renderPage(
   title: string,
   token: string,
@@ -37,5 +41,6 @@ export function renderPage(
   data: Record<string, unknown>,
 ): string {
   const body = bodyTemplate({ token, mode, ...data });
-  return tpl.layout({ title, token, mode, body });
+  const accountId = typeof data.accountId === 'number' ? data.accountId : 0;
+  return tpl.layout({ title, token, mode, accountId, body });
 }

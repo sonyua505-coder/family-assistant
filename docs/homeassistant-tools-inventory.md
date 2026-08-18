@@ -1,7 +1,7 @@
 # 家庭信息助理 · AstrBot 插件 LLM 工具清单（实测）
 
 > 来源：云端运行态 `/opt/homeassistant/plugins/astrbot_star_homeassistant/main.py`
-> 整理日期：2026-08-15（2026-08-16 同步到 42 个：方向 A 新增 bill_stats / export_bills；方向 B 新增 save_uploaded_file / parse_bills_file / import_bills / delete_file；**2026-08-17 调整为 40 个**：移除记忆域 remember/search_memory/forget，新增待办导出 export_tasks；**2026-08-18 新增 15 个 work_* 工具 → 55 个，随后删除 6 个旧查询工具 → 49 个，再新增 work_bill_stats → 50 个**：工作账单域 + 移除 list_bills/get_bill/query_bill_stats/query_bill_changes/list_bill_trash/restore_bill（已被 bill_stats/export_bills 等替代）+ keyword 搜索/统计/日报/WEB 页面）
+> 整理日期：2026-08-15（2026-08-16 同步到 42 个：方向 A 新增 bill_stats / export_bills；方向 B 新增 save_uploaded_file / parse_bills_file / import_bills / delete_file；**2026-08-17 调整为 40 个**：移除记忆域 remember/search_memory/forget，新增待办导出 export_tasks；**2026-08-18 新增 15 个 work_* 工具 → 55 个，随后删除 6 个旧查询工具 → 49 个，再新增 work_bill_stats → 50 个，随后恢复 list_bill_trash/restore_bill → 52 个**：工作账单域 + 移除 list_bills/get_bill/query_bill_stats/query_bill_changes（已被 bill_stats/export_bills 等替代）+ 恢复回收站两工具 + keyword 搜索/统计/日报/WEB 页面）
 > 用途：本地设计文档的权威对照。**新增工具不得与下表重名/同义**；本地要加新工具时，先在文档里追加条目再开发，避免云端部署时撞名。
 
 ## 0. 插件骨架（非工具，但契约相关）
@@ -15,7 +15,7 @@
 | outbox 主动推送 | 后台轮询 `GET /api/v1/outbox/pending?channel=qq&limit=10` → `context.send_message` → 回执 `POST /api/v1/outbox/{id}/delivery` |
 | 平台 id | 从 UMO 首段推断（qq_official），无命中时按 `{platform}:FriendMessage:{openid}` 构造 C2C 会话 |
 
-## 1. 工具总表（50 个）
+## 1. 工具总表（52 个）
 
 | # | 工具名 | 功能 | 后端端点 |
 |---|--------|------|----------|
@@ -69,6 +69,8 @@
 | 48 | `recalc_work_bills` | 批量重算未结算单（dry_run 预览/apply） | POST `api/v1/work-bills/recalc` |
 | 49 | `export_work_bills` | 账单查询/CSV 导出（summary/statement） | GET `api/v1/work-bills/export` |
 | 50 | `work_bill_stats` | 工作账单统计（合计应收/已收/欠款 + 按委托方/月份，chart 出图） | GET `api/v1/work-bills/stats` |
+| 51 | `list_bill_trash` | 列出回收站账单（软删未恢复，倒序） | GET `api/v1/bills/trash` |
+| 52 | `restore_bill` | 从回收站恢复账单 | POST `api/v1/bills/{id}/restore` |
 
 ## 2. 各工具 LLM 参数签名
 
@@ -90,7 +92,9 @@
 - `add_bill(type: str, amount: float, category?: str, note?: str, participants?: list, account_id?: int)` — type ∈ {income, expense}
 - `add_bills(bills: list, account_id?: int)` — bills 元素 {type, amount, category?, note?, occurred_at?, participants?}
 - `update_bill(bill_id: int, type?: str, amount?: float, category?: str, note?: str, participants?: list, occurred_at?: str)` — occurred_at 格式 YYYY-MM-DD 或 YYYY-MM-DD HH:MM:SS（2026-08-17 补，修正导入的日期错误）
-- `delete_bill(bill_id: int)` — 软删进回收站；回收站查看/恢复走记账网页「回收站」页（旧 list_bill_trash/restore_bill 工具已删除）
+- `delete_bill(bill_id: int)` — 软删进回收站；可用 list_bill_trash 查看、restore_bill 恢复，也可走记账网页「回收站」页
+- `list_bill_trash(account_id?: int)` — 列出回收站账单（软删未恢复，按删除时间倒序，显示前 10 条）；后端 `GET /api/v1/bills/trash`
+- `restore_bill(bill_id: int)` — 从回收站恢复账单；后端 `POST /api/v1/bills/{id}/restore`
 - `settle_bill(bill_id: int, participant_name?: str, all?: bool)`
 - `bill_stats(year?: int, month?: int, from_date?: str, to_date?: str, category?: str, amount_min?: int, amount_max?: int, account_id?: int, chart?: bool=True)` — 区间统计（`from_date/to_date` 优先于 `year/month`；金额单位「分」；`chart=True` 时 matplotlib 渲染「支出构成+收支趋势」PNG 并发送，金额展示为「元」）；后端 `GET /api/v1/bills/stats/range`
 - `export_bills(type?: str, category?: str, status?: str, participant?: str, month?: str, year?: int, from_date?: str, to_date?: str, amount_min?: int, amount_max?: int, account_id?: int, destination?: str="text", relative_path?: str, limit?: int=20)` — destination ∈ {text, workspace, user, both}；text 走 json 明细（**每行带 `#id`**，供 update_bill/delete_bill 定位；limit 上限 50），文件导出走 csv（workspace 存当前会话工作区按 `relative_path` 或自动命名，user 直接发 CSV 文件，both 两者）；后端 `GET /api/v1/bills/export`
@@ -124,7 +128,7 @@
 - `update_work_bill(bill_id: int, client_id?: int, address?: str, contact?: str, occurred_at?: str, note?: str, final_amount?: int, items?: list)` — **items 全量替换**；final_amount=0 清除
 - `delete_work_bill(bill_id: int)` — 软删
 - `settle_work_bill(bill_id: int, amount: int, settled_at?: str, note?: str)` — amount 单位「分」**实收**（可多次/部分，与计算金额解耦）
-- `recalc_work_bills(bill_ids?: list, client_id?: int, from_date?: str, to_date?: str, apply?: bool=False)` — **改单价不自动级联**；默认 dry_run 预览 diff，apply=true 才提交；只重算未完全结算单（已结算锁定）
+- `recalc_work_bills(bill_ids?: list, client_id?: int, from_date?: str, to_date?: str, account_id?: int, apply?: bool=False)` — **改单价不自动级联**；默认 dry_run 预览 diff，apply=true 才提交；只重算未完全结算单（已结算锁定）；**多账本必须带 account_id**（2026-08-18 补，修复原漏参致 ACCOUNT_AMBIGUOUS）
 - `export_work_bills(mode?: str="summary", client_id?: int, keyword?: str, from_date?: str, to_date?: str, status?: str, account_id?: int, destination?: str="text", relative_path?: str, limit?: int=20)` — mode ∈ {summary=日常简版, statement=结账版（含计算式子）}；`keyword`=地址或备注包含；destination 四模式同 export_bills；后端 `GET /api/v1/work-bills/export`
 - `work_bill_stats(year?: int, month?: int, from_date?: str, to_date?: str, client_id?: int, status?: str, account_id?: int, chart?: bool=False)` — 区间统计 `GET /api/v1/work-bills/stats`：合计应收/已收/欠款 + 按委托方（欠款降序）+ 按月份；`chart=True` 时 matplotlib 渲染「按委托方欠款 + 按月应收/已收」PNG 发送（单位元）
 
@@ -147,13 +151,13 @@
 1. **金额单位是「分」**：`amount` 工具层强制 `int(amount)`，1 元 = 100 分。所有返回里的金额也带「分」字。
 2. **AA 分摊**：`add_bill` 带 `participants`（名字数组）→ 账单 `status=pending` → `settle_bill` 结算。用户说「AA/平摊/垫付」时要先问清参与者再传。
 3. **多账本歧义**：用户有多个账本时，记账/查账/待办必须传 `account_id`，否则后端返回 ACCOUNT_AMBIGUOUS，由 LLM 引导指定。
-4. **软删除闭环**：`delete_bill` 软删进回收站；回收站查看/恢复走记账网页「回收站」页（LLM 侧旧 list_bill_trash/restore_bill 工具已于 2026-08-18 删除，替代工具实测无问题）。
+4. **软删除闭环**：`delete_bill` 软删进回收站；可用 `list_bill_trash`/`restore_bill` 工具（2026-08-18 恢复）或记账网页「回收站」页查看/恢复。**当前无「彻底删除/清空回收站」机制**，软删数据永久留存（不可见）——用户 2026-08-18 决策暂不加最终删除。
 5. **日期格式**：`month`=YYYY-MM、`date`=YYYY-MM-DD、`remind_at`=YYYY-MM-DD HH:MM。
 6. **source_type 因工具而异**：`subscribe_source` 只收 rss|preset；`fetch_source` 收 rss|url|preset。
 7. **身份不在 LLM 参数里**：x-platform/x-openid 由插件注入，LLM 猜不到也传不了——本地设计文档不要设计「让 LLM 传身份」的工具。
 8. **`get_my_identity` 未登记时返回引导语**，引导链：create_person → create_account → add_bill。
 9. **新查询/统计工具（方向 A，2026-08-16 云端上线）**：`export_bills`/`bill_stats` 对接 `/bills/export` 与 `/bills/stats/range`；金额过滤单位「分」；后端回显 `applied`（实际生效筛选），工具回复带「已生效筛选」供 LLM 自验证；`bill_stats` 图表由插件 matplotlib 渲染 PNG 直接发送。
-10. **旧查询/统计工具已删除（2026-08-18）**：list_bills/get_bill/query_bill_stats/query_bill_changes/list_bill_trash/restore_bill 六工具与其 `disable_legacy_query_tools` 停用机制一并移除（替代工具 bill_stats/export_bills 实测通过）。**后端端点 `/bills/trash`、`/bills/{id}/restore`、`/bills/changes`、`/bills/stats` 仍保留**，仅插件不再暴露为 LLM 工具。
+10. **旧查询/统计工具已删除（2026-08-18）**：list_bills/get_bill/query_bill_stats/query_bill_changes 四工具与其 `disable_legacy_query_tools` 停用机制一并移除（替代工具 bill_stats/export_bills 实测通过）。**list_bill_trash/restore_bill 于 2026-08-18 同日恢复**（用户决策：回收站闭环暂不加最终删除，工具恢复供 LLM 查看/恢复软删账单）。后端端点 `/bills/trash`、`/bills/{id}/restore`、`/bills/changes`、`/bills/stats` 全程保留。
 11. **文件导入（方向 B，2026-08-16 云端上线）**：`save_uploaded_file` → `parse_bills_file`（预览确认）→ `import_bills`（宽容入库）→ `delete_file`（清理）。文件金额默认「元」，插件解析时换算为「分」（区别于 LLM 工具参数约定——文件解析是插件职责，不做整批 400，坏行在 `failures` 里反馈 LLM 自修正）。工作区文件路径一律相对路径，插件 `resolve + is_relative_to` 校验防逃逸。
 
 ## 4. 新工具开发约定（写进本地文档）

@@ -7,7 +7,7 @@
     x-openid=消息发送者 openid，见 src/lib/identity.ts）。
   - 账本：create_account / list_my_accounts / join_account。
   - 记账：add_bill / add_bills(批量) / update_bill / delete_bill / settle_bill /
-    bill_stats(统计图) / export_bills(查询/导出)（含 AA 分摊）。
+    bill_stats(统计图) / export_bills(查询/导出) / list_bill_trash / restore_bill（含 AA 分摊）。
   - 待办：add_task / list_tasks / complete_task / undo_task / update_task / delete_task。
   - 工作账单（装修安装门，2026-08-18）：add_work_client / set_work_price / add_work_bill /
     list_work_bills / get_work_bill / settle_work_bill / recalc_work_bills / export_work_bills 等。
@@ -534,7 +534,53 @@ class HomeAssistantStar(Star):
         )
         if not data.get("ok", True):
             return f"删除失败：{data.get('body') or data.get('error') or data}"
-        return f"已删除账单#{bill_id}（软删除；回收站查看/恢复请在记账网页「回收站」页操作）。"
+        return f"已删除账单#{bill_id}（软删除进了回收站，可 list_bill_trash 查看、restore_bill 恢复；也可在记账网页「回收站」页操作）。"
+
+    @filter.llm_tool(name="list_bill_trash")
+    async def list_bill_trash(self, event: AstrMessageEvent, account_id: int = None) -> str:
+        """列出回收站里的账单（软删除、尚未恢复的，按删除时间倒序）。
+
+        Args:
+            account_id(number): 记账账户 id（用户有多个账本时必须指定）。
+        """
+        params = {}
+        if account_id:
+            params["account_id"] = account_id
+        qs = urlencode(params)
+        data = await self._api("GET", f"api/v1/bills/trash?{qs}", identity=self._identity(event))
+        if not data.get("ok", True):
+            return self._err_msg(data)
+        items = data.get("items") or []
+        if not items:
+            return "回收站是空的。"
+        lines = []
+        for it in items[:10]:
+            kind = "支出" if it.get("type") == "expense" else "收入"
+            lines.append(
+                f"#{it.get('id')} {kind} {it.get('amount')}分 "
+                f"{it.get('category') or ''} {it.get('note') or ''} {str(it.get('deleted_at') or '')[:10]}"
+            )
+        more = f"（仅显示前 10 条，共 {len(items)} 条）" if len(items) > 10 else ""
+        return "回收站账单（可用 restore_bill 恢复）:\n" + "\n".join(lines) + more
+
+    @filter.llm_tool(name="restore_bill")
+    async def restore_bill(self, event: AstrMessageEvent, bill_id: int) -> str:
+        """从回收站恢复一笔已删除的账单（软删除可反悔）。
+
+        Args:
+            bill_id(number): 账单 id（来自 delete_bill 的 #id 或 list_bill_trash 列表）。
+        """
+        data = await self._api(
+            "POST", f"api/v1/bills/{bill_id}/restore", identity=self._identity(event),
+        )
+        if not data.get("ok", True):
+            return self._err_msg(data)
+        b = data.get("bill") or {}
+        kind = "支出" if b.get("type") == "expense" else "收入"
+        return (
+            f"已恢复账单#{b.get('id')}：{kind} {b.get('amount')}分 "
+            f"（{b.get('category') or '未分类'}）"
+        )
 
     @staticmethod
     def _normalize_participants(participants: list) -> list:
@@ -1321,6 +1367,7 @@ class HomeAssistantStar(Star):
         client_id: int = None,
         from_date: str = None,
         to_date: str = None,
+        account_id: int = None,
         apply: bool = False,
     ) -> str:
         """按最新单价表批量重算未结算账单（已结算单锁定不动）。改单价后账单不会自动变，需要时手动触发；默认只预览返回 diff，apply=true 才提交。
@@ -1330,6 +1377,7 @@ class HomeAssistantStar(Star):
             client_id(number): 按委托方筛全部未结算单（可选）。
             from_date(string): 起始安装日期 YYYY-MM-DD（可选）。
             to_date(string): 结束安装日期 YYYY-MM-DD（可选）。
+            account_id(number): 归属账户 id（有多个账本时必须指定）。
             apply(boolean): true=提交重算；默认 false=只预览（可选）。
         """
         params = {}
@@ -1341,6 +1389,8 @@ class HomeAssistantStar(Star):
             params["from"] = from_date
         if to_date:
             params["to"] = to_date
+        if account_id:
+            params["account_id"] = account_id
         if apply:
             params["dry_run"] = "0"
         qs = urlencode(params)

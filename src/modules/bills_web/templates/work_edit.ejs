@@ -24,7 +24,7 @@
     <div class="toolbar">
       <input type="text" name="note" value="<%= bill.note %>" placeholder="整单备注（可选）" style="flex:1">
       <button>保存修改</button>
-      <a href="/w/<%= token %>/work?account_id=<%= accountId %>"><button class="ghost" type="button">返回</button></a>
+      <a class="btn" href="/w/<%= token %>/work?account_id=<%= accountId %>">返回</a>
     </div>
   </form>
   <div class="muted" style="margin-top:8px">工作账单 #<%= bill.id %> · 安装内容全量替换，空品名行忽略。</div>

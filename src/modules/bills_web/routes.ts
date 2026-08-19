@@ -168,6 +168,15 @@ export async function registerBillsWebRoutes(app: FastifyInstance, deps: BillsWe
     return reply.code(303).header('location', path).send();
   }
 
+  /** 解析账本选择器的复合值（"daily-3" / "work-3" / "task-3"；裸数字按页面自身系列，兼容旧链接）。
+   *  id 为 NaN 时由 webAccount 抛 404（与原 Number() 行为一致）。 */
+  function parseAccountSel(raw: string | undefined, pageSeries: 'daily' | 'work' | 'task'): { series: 'daily' | 'work' | 'task'; id: number | undefined } {
+    if (raw === undefined || raw === '') return { series: pageSeries, id: undefined };
+    const m = /^(daily|work|task)-(\d+)$/.exec(raw);
+    if (m) return { series: m[1] as 'daily' | 'work' | 'task', id: Number(m[2]) };
+    return { series: pageSeries, id: Number(raw) };
+  }
+
   /** 账户切换链接参数（分页/筛选保留）。 */
   function accQs(accountId: number, extra: Record<string, string | undefined> = {}): string {
     const parts = [`account_id=${accountId}`];
@@ -184,35 +193,41 @@ export async function registerBillsWebRoutes(app: FastifyInstance, deps: BillsWe
     const accounts = listAccountsForPerson(db, personId);
     const d = new Date();
     const ym = { year: d.getFullYear(), month: d.getMonth() + 1 };
-    // 上月 ym（跨年处理）
-    const lastYm =
-      ym.month === 1 ? { year: ym.year - 1, month: 12 } : { year: ym.year, month: ym.month - 1 };
+    const ymStr = `${ym.year}-${String(ym.month).padStart(2, '0')}`;
+    // 每账本三视图：日常账单 / 工作账单 / 代办（缺数据一律记 0）
     const cards = accounts.map((a) => {
+      // —— 日常账单：本月汇总 ——
       const s = billStats(db, a.id, ym);
-      const last = billStats(db, a.id, lastYm);
-      const balance = s.income - s.expense;
-      // 环比上月支出增减（上月支出为 0 → mom=null 显示「—」）
-      const mom =
-        last.expense === 0 ? null : Math.round(((s.expense - last.expense) / last.expense) * 100);
-      const top = (s.by_category || []).slice(0, 3).map((c) => ({ category: c.category, amountYuan: yuan(c.amount) }));
+      const dailyBalance = s.income - s.expense;
+      const dailyCount = listBills(db, a.id, { month: ymStr, page_size: 1 }).total;
+      // —— 工作账单：累计汇总 ——
+      const w = workBillStats(db, a.id, {});
+      // —— 代办：未完成 / 已完成 ——
       const pendingTasks = listTasks(db, a.id, { is_done: false, page_size: 1 }).total;
-      const workOwed = workBillStats(db, a.id, {}).owed;
+      const doneTasks = listTasks(db, a.id, { is_done: true, page_size: 1 }).total;
       return {
         id: a.id,
         name: a.name,
         type: a.type,
-        role: a.role,
-        income: yuan(s.income),
-        expense: yuan(s.expense),
-        balance: yuan(balance),
-        balanceClass: balance >= 0 ? 'income' : 'expense',
-        mom,
-        momText: mom === null ? '—' : `${mom > 0 ? '+' : ''}${mom}%`,
-        momClass: mom === null ? '' : mom > 0 ? 'up' : 'down',
-        topCategories: top,
-        pendingTasks,
-        workOwed: yuan(workOwed),
-        workOwedClass: workOwed > 0 ? 'expense' : '',
+        roleText: a.role === 'owner' ? '创建者' : '成员',
+        daily: {
+          income: yuan(s.income),
+          expense: yuan(s.expense),
+          balance: yuan(dailyBalance),
+          balanceClass: dailyBalance >= 0 ? 'income' : 'expense',
+          count: dailyCount,
+        },
+        work: {
+          receivable: yuan(w.receivable),
+          paid: yuan(w.paid),
+          owed: yuan(w.owed),
+          owedClass: w.owed > 0 ? 'expense' : '',
+          count: w.bill_count,
+        },
+        tasks: {
+          pending: pendingTasks,
+          done: doneTasks,
+        },
       };
     });
     const html = renderPage('账本总览', token, req.web!.mode, tpl.overview, { accounts: cards });
@@ -224,7 +239,10 @@ export async function registerBillsWebRoutes(app: FastifyInstance, deps: BillsWe
     const { personId } = req.web!;
     const token = (req.params as { token: string }).token;
     const q = req.query as Record<string, string | undefined>;
-    const { account, accounts } = webAccount(personId, q.account_id !== undefined ? Number(q.account_id) : undefined);
+    const sel = parseAccountSel(q.account_id, 'daily');
+    if (sel.series === 'work') return redirect(reply, `/w/${token}/work?account_id=${sel.id}`);
+    if (sel.series === 'task') return redirect(reply, `/w/${token}/tasks?account_id=${sel.id}`);
+    const { account, accounts } = webAccount(personId, sel.id);
     if (!account) return reply.type('text/html; charset=utf-8').send(renderPage('账单', token, req.web!.mode, tpl.bills, { accounts: [], accountId: 0, error: '' }));
 
     const month = q.month && /^\d{4}-\d{2}$/.test(q.month) ? q.month : undefined;
@@ -265,10 +283,13 @@ export async function registerBillsWebRoutes(app: FastifyInstance, deps: BillsWe
     };
     const pagerHref = (p: number): string =>
       `/w/${token}/bills?${accQs(account.id, filters)}&page=${p}`;
+    // 导出链接带上当前筛选，确保「所见即所导」
+    const exportHref = `/w/${token}/export?${accQs(account.id, filters)}`;
 
     const html = renderPage('账单', token, req.web!.mode, tpl.bills, {
       accounts: accounts.map((a) => ({ id: a.id, name: a.name })),
       accountId: account.id,
+      exportHref,
       ...filters,
       categories: [...BILL_CATEGORIES],
       items: rows,
@@ -286,7 +307,10 @@ export async function registerBillsWebRoutes(app: FastifyInstance, deps: BillsWe
     const { personId } = req.web!;
     const token = (req.params as { token: string }).token;
     const q = req.query as Record<string, string | undefined>;
-    const { account, accounts } = webAccount(personId, q.account_id !== undefined ? Number(q.account_id) : undefined);
+    const sel = parseAccountSel(q.account_id, 'daily');
+    if (sel.series === 'work') return redirect(reply, `/w/${token}/work/stats?account_id=${sel.id}`);
+    if (sel.series === 'task') return redirect(reply, `/w/${token}/tasks/stats?account_id=${sel.id}`);
+    const { account, accounts } = webAccount(personId, sel.id);
     if (!account) return reply.type('text/html; charset=utf-8').send(renderPage('统计', token, req.web!.mode, tpl.stats, { accounts: [], accountId: 0, income: 0, expense: 0 }));
 
     const year = q.year !== undefined && /^\d{4}$/.test(q.year) ? Number(q.year) : undefined;
@@ -313,7 +337,10 @@ export async function registerBillsWebRoutes(app: FastifyInstance, deps: BillsWe
     const { personId } = req.web!;
     const token = (req.params as { token: string }).token;
     const q = req.query as Record<string, string | undefined>;
-    const { account, accounts } = webAccount(personId, q.account_id !== undefined ? Number(q.account_id) : undefined);
+    const sel = parseAccountSel(q.account_id, 'daily');
+    if (sel.series === 'work') return redirect(reply, `/w/${token}/work?account_id=${sel.id}`);
+    if (sel.series === 'task') return redirect(reply, `/w/${token}/tasks?account_id=${sel.id}`);
+    const { account, accounts } = webAccount(personId, sel.id);
     if (!account) return reply.type('text/html; charset=utf-8').send(renderPage('待收', token, req.web!.mode, tpl.aa, { accounts: [], accountId: 0 }));
 
     const { items } = listBills(db, account.id, { status: 'pending', page_size: 200 });
@@ -336,26 +363,57 @@ export async function registerBillsWebRoutes(app: FastifyInstance, deps: BillsWe
     return reply.type('text/html; charset=utf-8').send(html);
   });
 
-  // —— 回收站 ——
+  // —— 回收站（日常账单 / 工作账单 / 代办 三类，按账本区分）——
   app.get('/w/:token/trash', { preHandler: webAuth }, async (req, reply) => {
     const { personId } = req.web!;
     const token = (req.params as { token: string }).token;
     const q = req.query as Record<string, string | undefined>;
     const { account, accounts } = webAccount(personId, q.account_id !== undefined ? Number(q.account_id) : undefined);
-    if (!account) return reply.type('text/html; charset=utf-8').send(renderPage('回收站', token, req.web!.mode, tpl.trash, { accounts: [], accountId: 0 }));
+    if (!account) return reply.type('text/html; charset=utf-8').send(renderPage('回收站', token, req.web!.mode, tpl.trash, { accounts: [], accountId: 0, kind: 'daily', items: [], kinds: [] }));
 
-    const items = listTrash(db, account.id).map((b) => ({
-      id: b.id,
-      deleted_at: b.deleted_at,
-      occurred_at: b.occurred_at,
-      note: b.note,
-      category: b.category,
-      type: b.type,
-      amountYuan: yuan(b.amount),
-    }));
+    const kind: 'daily' | 'work' | 'task' =
+      q.kind === 'work' || q.kind === 'task' ? q.kind : 'daily';
+
+    let items: Array<Record<string, unknown>> = [];
+    if (kind === 'daily') {
+      items = listTrash(db, account.id).map((b) => ({
+        kind: 'daily',
+        id: b.id,
+        deleted_at: b.deleted_at,
+        occurred_at: b.occurred_at,
+        note: b.note,
+        category: b.category,
+        type: b.type,
+        amountYuan: yuan(b.amount),
+      }));
+    } else if (kind === 'work') {
+      const clients = listClients(db, account.id);
+      const clientName = (id: number) => clients.find((c) => c.id === id)?.name || `委托方#${id}`;
+      items = listWorkBillTrash(db, account.id).map((b) => ({
+        kind: 'work',
+        id: b.id,
+        deleted_at: b.deleted_at,
+        client_name: clientName(b.client_id),
+        address: b.address,
+        occurred_at: b.occurred_at,
+        note: b.note,
+        amountYuan: yuan(b.final_amount ?? 0),
+      }));
+    } else {
+      items = listTaskTrash(db, account.id).map((t) => ({
+        kind: 'task',
+        id: t.id,
+        deleted_at: t.deleted_at,
+        content: t.content,
+        category: t.category,
+        is_done: t.is_done === 1,
+      }));
+    }
+
     const html = renderPage('回收站', token, req.web!.mode, tpl.trash, {
       accounts: accounts.map((a) => ({ id: a.id, name: a.name })),
       accountId: account.id,
+      kind,
       items,
     });
     return reply.type('text/html; charset=utf-8').send(html);
@@ -368,9 +426,24 @@ export async function registerBillsWebRoutes(app: FastifyInstance, deps: BillsWe
     const { account } = webAccount(personId, q.account_id !== undefined ? Number(q.account_id) : undefined);
     if (!account) throw new AppError(404, 'ACCOUNT_NOT_FOUND', '找不到该账本');
 
+    // 与账单列表页一致的筛选参数：确保导出 = 当前所见筛选结果，而非全量
+    const month = q.month && /^\d{4}-\d{2}$/.test(q.month) ? q.month : undefined;
     const from = q.from && /^\d{4}-\d{2}-\d{2}$/.test(q.from) ? q.from : undefined;
     const to = q.to && /^\d{4}-\d{2}-\d{2}$/.test(q.to) ? q.to : undefined;
-    const bills = exportBills(db, account.id, { from, to });
+    const amountMinYuan = q.amount_min !== undefined && q.amount_min !== '' ? Number(q.amount_min) : undefined;
+    const amountMaxYuan = q.amount_max !== undefined && q.amount_max !== '' ? Number(q.amount_max) : undefined;
+    const toFen = (v: number | undefined): number | undefined => (Number.isFinite(v) && v! >= 0 ? Math.round(v! * 100) : undefined);
+    const bills = exportBills(db, account.id, {
+      month,
+      category: q.category || undefined,
+      type: q.type || undefined,
+      status: q.status === 'pending' || q.status === 'settled' ? q.status : undefined,
+      participant: q.participant || undefined,
+      amount_min: toFen(amountMinYuan),
+      amount_max: toFen(amountMaxYuan),
+      from,
+      to,
+    });
     const csv = buildBillCsv(bills);
 
     // filename 含中文需 RFC 5987 编码；加 UTF-8 BOM 让 Excel 正确识别中文
@@ -549,17 +622,28 @@ export async function registerBillsWebRoutes(app: FastifyInstance, deps: BillsWe
     if (!account) return reply.type('text/html; charset=utf-8').send(renderPage('待办', token, req.web!.mode, tpl.tasks, { accounts: [], accountId: 0, error: '', trash: false }));
 
     const trash = q.trash === '1';
+    // 筛选（listTasks/exportTasks 同套过滤，所见即所导；status 参数名避免与 is_done 混淆）
+    const status = q.status === 'done' ? 'done' : q.status === 'undone' ? 'undone' : '';
+    const isDone = status === 'done' ? true : status === 'undone' ? false : undefined;
+    const category = q.category || undefined;
+    const keyword = q.q || undefined;
+    const filters = { status, category: category ?? '', q: keyword ?? '' };
+    const exportHref = `/w/${token}/tasks/export?${accQs(account.id, filters)}`;
+    // 该账本已有分类（任务分类为自由文本，聚合供筛选下拉 + 新增/编辑 datalist 建议）
+    const taskCats = (
+      db.prepare(`SELECT DISTINCT category FROM tasks WHERE account_id = ? AND is_deleted = 0 AND category != '' ORDER BY category`).all(account.id) as Array<{ category: string }>
+    ).map((r) => r.category);
+
     let rows: Array<Record<string, unknown>>;
     let total = 0;
     if (trash) {
       rows = listTaskTrash(db, account.id).map((t) => ({ id: t.id, content: t.content, category: t.category, deleted_at: t.deleted_at }));
       total = rows.length;
     } else {
-      // 未完成 + 已完成各取一批合并展示（未完成在前）
-      const undone = listTasks(db, account.id, { is_done: false, page_size: 200 });
-      const done = listTasks(db, account.id, { is_done: true, page_size: 200 });
-      rows = [...undone.items, ...done.items].map((t) => ({ id: t.id, content: t.content, category: t.category, is_done: t.is_done, remind_at: t.remind_at }));
-      total = rows.length;
+      // 一次查询：未完成排前（is_done ASC）；按筛选过滤
+      const { items, total: t } = listTasks(db, account.id, { is_done: isDone, category, q: keyword, page_size: 200 });
+      total = t;
+      rows = items.map((t) => ({ id: t.id, content: t.content, category: t.category, is_done: t.is_done, remind_at: t.remind_at }));
     }
     const html = renderPage('待办', token, req.web!.mode, tpl.tasks, {
       accounts: accounts.map((a) => ({ id: a.id, name: a.name })),
@@ -567,6 +651,9 @@ export async function registerBillsWebRoutes(app: FastifyInstance, deps: BillsWe
       items: rows,
       total,
       trash,
+      exportHref,
+      taskCats,
+      ...filters,
       error: typeof q.error === 'string' ? q.error : '',
     });
     return reply.type('text/html; charset=utf-8').send(html);
@@ -633,7 +720,8 @@ export async function registerBillsWebRoutes(app: FastifyInstance, deps: BillsWe
     const task = requireTaskAny(personId, (req.params as { id: string }).id);
     const after = restoreTask(db, task.id)!;
     logOperation(db, { personId, accountId: task.account_id, action: 'task.restore', entity: 'tasks', entityId: task.id, after });
-    return redirect(reply, `/w/${token}/tasks?account_id=${task.account_id}&trash=1`);
+    const k = ((req.body ?? {}) as Record<string, unknown>).kind;
+    return redirect(reply, k === 'task' ? `/w/${token}/trash?account_id=${task.account_id}&kind=task` : `/w/${token}/tasks?account_id=${task.account_id}&trash=1`);
   });
 
   app.post('/w/:token/tasks/:id/purge', { preHandler: [webAuth, requireWrite] }, async (req, reply) => {
@@ -642,7 +730,8 @@ export async function registerBillsWebRoutes(app: FastifyInstance, deps: BillsWe
     const task = requireTaskAny(personId, (req.params as { id: string }).id);
     purgeTask(db, task.id);
     logOperation(db, { personId, accountId: task.account_id, action: 'task.purge', entity: 'tasks', entityId: task.id, before: task });
-    return redirect(reply, `/w/${token}/tasks?account_id=${task.account_id}&trash=1`);
+    const k = ((req.body ?? {}) as Record<string, unknown>).kind;
+    return redirect(reply, k === 'task' ? `/w/${token}/trash?account_id=${task.account_id}&kind=task` : `/w/${token}/tasks?account_id=${task.account_id}&trash=1`);
   });
 
   // 待办编辑
@@ -650,8 +739,12 @@ export async function registerBillsWebRoutes(app: FastifyInstance, deps: BillsWe
     const { personId } = req.web!;
     const token = (req.params as { token: string }).token;
     const task = requireTask(personId, (req.params as { id: string }).id);
+    const taskCats = (
+      db.prepare(`SELECT DISTINCT category FROM tasks WHERE account_id = ? AND is_deleted = 0 AND category != '' ORDER BY category`).all(task.account_id) as Array<{ category: string }>
+    ).map((r) => r.category);
     const html = renderPage('编辑待办', token, req.web!.mode, tpl.taskEdit, {
       task: { id: task.id, content: task.content, category: task.category, remind_at: task.remind_at ?? '' },
+      taskCats,
       accountId: task.account_id,
       error: typeof (req.query as Record<string, string | undefined>).error === 'string' ? (req.query as Record<string, string | undefined>).error : '',
     });
@@ -684,7 +777,10 @@ export async function registerBillsWebRoutes(app: FastifyInstance, deps: BillsWe
     const { personId } = req.web!;
     const token = (req.params as { token: string }).token;
     const q = req.query as Record<string, string | undefined>;
-    const { account, accounts } = webAccount(personId, q.account_id !== undefined ? Number(q.account_id) : undefined);
+    const sel = parseAccountSel(q.account_id, 'task');
+    if (sel.series === 'daily') return redirect(reply, `/w/${token}/stats?account_id=${sel.id}`);
+    if (sel.series === 'work') return redirect(reply, `/w/${token}/work/stats?account_id=${sel.id}`);
+    const { account, accounts } = webAccount(personId, sel.id);
     if (!account) return reply.type('text/html; charset=utf-8').send(renderPage('待办统计', token, req.web!.mode, tpl.taskStats, { accounts: [], accountId: 0, error: '' }));
 
     const undone = listTasks(db, account.id, { is_done: false, page_size: 200 });
@@ -719,7 +815,12 @@ export async function registerBillsWebRoutes(app: FastifyInstance, deps: BillsWe
     const q = req.query as Record<string, string | undefined>;
     const { account } = webAccount(personId, q.account_id !== undefined ? Number(q.account_id) : undefined);
     if (!account) throw new AppError(404, 'ACCOUNT_NOT_FOUND', '找不到该账本');
-    const tasks = exportTasks(db, account.id, {});
+    const isDone = q.status === 'done' ? true : q.status === 'undone' ? false : undefined;
+    const tasks = exportTasks(db, account.id, {
+      is_done: isDone,
+      category: q.category || undefined,
+      q: q.q || undefined,
+    });
     const csv = buildTaskCsv(tasks);
     reply.header('Content-Type', 'text/csv; charset=utf-8');
     reply.header('Content-Disposition', `attachment; filename="tasks.csv"; filename*=UTF-8''${encodeURIComponent(`tasks-${account.name}-${today()}.csv`)}`);
@@ -734,12 +835,25 @@ export async function registerBillsWebRoutes(app: FastifyInstance, deps: BillsWe
     const { personId } = req.web!;
     const token = (req.params as { token: string }).token;
     const q = req.query as Record<string, string | undefined>;
-    const { account, accounts } = webAccount(personId, q.account_id !== undefined ? Number(q.account_id) : undefined);
+    const sel = parseAccountSel(q.account_id, 'work');
+    if (sel.series === 'daily') return redirect(reply, `/w/${token}/bills?account_id=${sel.id}`);
+    if (sel.series === 'task') return redirect(reply, `/w/${token}/tasks?account_id=${sel.id}`);
+    const { account, accounts } = webAccount(personId, sel.id);
     if (!account) return reply.type('text/html; charset=utf-8').send(renderPage('工作记账', token, req.web!.mode, tpl.work, { accounts: [], accountId: 0, error: '', trash: false }));
 
     const trash = q.trash === '1';
     const clients = listClients(db, account.id);
+    // 筛选（后端 listWorkBills/exportWorkBills 同套过滤，所见即所导）
+    const status = q.status && ['unsettled', 'partial', 'settled'].includes(q.status) ? q.status : undefined;
+    const clientId = q.client_id !== undefined && Number(q.client_id) > 0 ? Number(q.client_id) : undefined;
+    const keyword = q.keyword || undefined;
+    const from = q.from && /^\d{4}-\d{2}-\d{2}$/.test(q.from) ? q.from : undefined;
+    const to = q.to && /^\d{4}-\d{2}-\d{2}$/.test(q.to) ? q.to : undefined;
+    const filters = { status, client_id: q.client_id || '', keyword: q.keyword || '', from: from ?? '', to: to ?? '' };
+    const exportHref = `/w/${token}/work/export?${accQs(account.id, filters)}`;
+
     let rows: Array<Record<string, unknown>>;
+    let total = 0;
     if (trash) {
       rows = listWorkBillTrash(db, account.id).map((b) => ({
         id: b.id,
@@ -749,8 +863,17 @@ export async function registerBillsWebRoutes(app: FastifyInstance, deps: BillsWe
         occurred_at: b.occurred_at,
         deleted_at: b.deleted_at,
       }));
+      total = rows.length;
     } else {
-      const { items } = listWorkBills(db, account.id, { page_size: 200 });
+      const { items, total: t } = listWorkBills(db, account.id, {
+        status,
+        client_id: clientId,
+        keyword,
+        from,
+        to,
+        page_size: 200,
+      });
+      total = t;
       rows = items.map((b) => ({
         id: b.id,
         client_name: b.client_name,
@@ -768,9 +891,11 @@ export async function registerBillsWebRoutes(app: FastifyInstance, deps: BillsWe
       accounts: accounts.map((a) => ({ id: a.id, name: a.name })),
       accountId: account.id,
       items: rows,
-      total: rows.length,
+      total,
       clients: clients.map((c) => ({ id: c.id, name: c.name })),
       trash,
+      exportHref,
+      ...filters,
       error: typeof q.error === 'string' ? q.error : '',
     });
     return reply.type('text/html; charset=utf-8').send(html);
@@ -791,7 +916,7 @@ export async function registerBillsWebRoutes(app: FastifyInstance, deps: BillsWe
         client_id: clientId,
         address: String(body.address ?? ''),
         contact: String(body.contact ?? ''),
-        occurred_at: typeof body.occurred_at === 'string' && body.occurred_at ? body.occurred_at : undefined,
+        occurred_at: typeof body.occurred_at === 'string' && body.occurred_at ? body.occurred_at : today(),
         note: String(body.note ?? ''),
         items: parseWorkItems(body),
       });
@@ -842,7 +967,8 @@ export async function registerBillsWebRoutes(app: FastifyInstance, deps: BillsWe
     const bill = requireWorkBillAny(personId, (req.params as { id: string }).id);
     const after = restoreWorkBill(db, bill.id)!;
     logOperation(db, { personId, accountId: bill.account_id, action: 'work_bill.restore', entity: 'work_bills', entityId: bill.id, after });
-    return redirect(reply, `/w/${token}/work?account_id=${bill.account_id}&trash=1`);
+    const k = ((req.body ?? {}) as Record<string, unknown>).kind;
+    return redirect(reply, k === 'work' ? `/w/${token}/trash?account_id=${bill.account_id}&kind=work` : `/w/${token}/work?account_id=${bill.account_id}&trash=1`);
   });
 
   app.post('/w/:token/work/:id/purge', { preHandler: [webAuth, requireWrite] }, async (req, reply) => {
@@ -851,7 +977,8 @@ export async function registerBillsWebRoutes(app: FastifyInstance, deps: BillsWe
     const bill = requireWorkBillAny(personId, (req.params as { id: string }).id);
     purgeWorkBill(db, bill.id);
     logOperation(db, { personId, accountId: bill.account_id, action: 'work_bill.purge', entity: 'work_bills', entityId: bill.id, before: bill });
-    return redirect(reply, `/w/${token}/work?account_id=${bill.account_id}&trash=1`);
+    const k = ((req.body ?? {}) as Record<string, unknown>).kind;
+    return redirect(reply, k === 'work' ? `/w/${token}/trash?account_id=${bill.account_id}&kind=work` : `/w/${token}/work?account_id=${bill.account_id}&trash=1`);
   });
 
   // 工作账单编辑
@@ -900,7 +1027,10 @@ export async function registerBillsWebRoutes(app: FastifyInstance, deps: BillsWe
     const { personId } = req.web!;
     const token = (req.params as { token: string }).token;
     const q = req.query as Record<string, string | undefined>;
-    const { account, accounts } = webAccount(personId, q.account_id !== undefined ? Number(q.account_id) : undefined);
+    const sel = parseAccountSel(q.account_id, 'work');
+    if (sel.series === 'daily') return redirect(reply, `/w/${token}/stats?account_id=${sel.id}`);
+    if (sel.series === 'task') return redirect(reply, `/w/${token}/tasks/stats?account_id=${sel.id}`);
+    const { account, accounts } = webAccount(personId, sel.id);
     if (!account) return reply.type('text/html; charset=utf-8').send(renderPage('工作统计', token, req.web!.mode, tpl.workStats, { accounts: [], accountId: 0, error: '' }));
 
     const from = q.from && /^\d{4}-\d{2}-\d{2}$/.test(q.from) ? q.from : undefined;
@@ -929,7 +1059,12 @@ export async function registerBillsWebRoutes(app: FastifyInstance, deps: BillsWe
     const { account } = webAccount(personId, q.account_id !== undefined ? Number(q.account_id) : undefined);
     if (!account) throw new AppError(404, 'ACCOUNT_NOT_FOUND', '找不到该账本');
     const mode = q.mode === 'statement' ? 'statement' : 'summary';
-    const { bills } = exportWorkBills(db, account.id, {});
+    const status = q.status && ['unsettled', 'partial', 'settled'].includes(q.status) ? q.status : undefined;
+    const clientId = q.client_id !== undefined && Number(q.client_id) > 0 ? Number(q.client_id) : undefined;
+    const keyword = q.keyword || undefined;
+    const from = q.from && /^\d{4}-\d{2}-\d{2}$/.test(q.from) ? q.from : undefined;
+    const to = q.to && /^\d{4}-\d{2}-\d{2}$/.test(q.to) ? q.to : undefined;
+    const { bills } = exportWorkBills(db, account.id, { status, client_id: clientId, keyword, from, to });
     const csv = mode === 'statement' ? buildWorkBillsStatementCsv(bills) : buildWorkBillsSummaryCsv(bills);
     reply.header('Content-Type', 'text/csv; charset=utf-8');
     reply.header('Content-Disposition', `attachment; filename="work-bills.csv"; filename*=UTF-8''${encodeURIComponent(`work-bills-${account.name}-${today()}.csv`)}`);

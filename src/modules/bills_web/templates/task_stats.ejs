@@ -5,11 +5,7 @@
 <% } else { %>
 
 <form class="toolbar" method="get" action="/w/<%= token %>/tasks/stats">
-  <select name="account_id">
-    <% accounts.forEach(function(a){ %>
-      <option value="<%= a.id %>" <%= a.id === accountId ? 'selected' : '' %>><%= a.name %></option>
-    <% }) %>
-  </select>
+  <select name="account_id"><%- opt(accounts, accountId, 'task') %></select>
   <button>查看</button>
 </form>
 

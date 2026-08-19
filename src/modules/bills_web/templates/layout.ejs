@@ -23,6 +23,8 @@ nav{position:sticky;top:0;z-index:10;background:rgba(255,255,255,.9);backdrop-fi
 nav .brand{font-weight:800;font-size:16px;color:var(--text);margin-right:10px;letter-spacing:.3px}
 nav a{color:#475569;text-decoration:none;font-size:14px;padding:7px 13px;border-radius:10px;transition:all .15s;font-weight:500}
 nav a:hover{background:var(--primary-soft);color:var(--primary)}
+nav a.active{background:var(--primary);color:#fff}
+nav a.active:hover{filter:brightness(1.05)}
 nav .mode{margin-left:auto;font-size:12px;font-weight:700;padding:4px 12px;border-radius:20px;background:var(--blue-soft);color:var(--blue)}
 main{max-width:940px;margin:0 auto;padding:22px 16px 52px}
 h1{font-size:21px;margin:2px 0 16px;font-weight:800}
@@ -86,6 +88,16 @@ form.inline{display:inline;margin-right:4px}
 .pager a{color:var(--primary);text-decoration:none;padding:6px 13px;border:1px solid var(--border);border-radius:var(--radius-sm);font-weight:500}
 .pager a:hover{background:var(--primary-soft);border-color:var(--primary)}
 .error{background:var(--red-soft);color:var(--red);border:1px solid #f5c6cb;border-radius:var(--radius-sm);padding:10px 14px;margin-bottom:14px;font-weight:500}
+/* 总览：每账本三段式（日常 / 工作 / 代办） */
+.seg{margin-top:14px;padding-top:14px;border-top:1px dashed var(--border)}
+.seg:first-of-type{margin-top:4px;padding-top:0;border-top:none}
+.seg h3{margin:0 0 10px;font-size:14px;font-weight:700;color:var(--muted);display:flex;align-items:center;gap:6px;flex-wrap:wrap}
+a.btn{display:inline-block;text-decoration:none;font-size:14px;font-weight:600;padding:7px 13px;border-radius:var(--radius-sm);border:1px solid var(--primary);color:var(--primary);background:#fff;transition:all .15s;white-space:nowrap}
+a.btn:hover{background:var(--primary-soft)}
+a.btn.danger{border-color:var(--red);color:var(--red)}
+a.btn.danger:hover{background:var(--red-soft)}
+a.btn.right{margin-left:auto}
+a.btn.icon{padding:7px 10px;line-height:1}
 /* 移动端 */
 @media (max-width:640px){
   nav{padding:8px 10px;gap:2px}
@@ -105,14 +117,11 @@ form.inline{display:inline;margin-right:4px}
 <body>
 <nav>
   <span class="brand">🏠 家庭账本</span>
-  <a href="/w/<%= token %>">📊 总览</a>
-  <a href="/w/<%= token %>/bills<%= accountId > 0 ? '?account_id=' + accountId : '' %>">🧾 账单</a>
-  <a href="/w/<%= token %>/tasks<%= accountId > 0 ? '?account_id=' + accountId : '' %>">✅ 待办</a>
-  <a href="/w/<%= token %>/work<%= accountId > 0 ? '?account_id=' + accountId : '' %>">🔨 工作</a>
-  <a href="/w/<%= token %>/stats<%= accountId > 0 ? '?account_id=' + accountId : '' %>">📈 统计</a>
-  <a href="/w/<%= token %>/aa<%= accountId > 0 ? '?account_id=' + accountId : '' %>">💰 待收</a>
-  <a href="/w/<%= token %>/trash<%= accountId > 0 ? '?account_id=' + accountId : '' %>">🗑️ 回收站</a>
-  <a href="/w/<%= token %>/export<%= accountId > 0 ? '?account_id=' + accountId : '' %>">⬇️ 导出</a>
+  <a href="/w/<%= token %>" data-nav="home" class="<%= active === 'home' ? 'active' : '' %>">📊 总览</a>
+  <a href="/w/<%= token %>/bills<%= accountId > 0 ? '?account_id=' + accountId : '' %>" data-nav="bills" class="<%= active === 'bills' ? 'active' : '' %>">🧾 账单</a>
+  <a href="/w/<%= token %>/tasks<%= accountId > 0 ? '?account_id=' + accountId : '' %>" data-nav="tasks" class="<%= active === 'tasks' ? 'active' : '' %>">✅ 待办</a>
+  <a href="/w/<%= token %>/stats<%= accountId > 0 ? '?account_id=' + accountId : '' %>" data-nav="stats" class="<%= active === 'stats' ? 'active' : '' %>">📈 统计</a>
+  <a href="/w/<%= token %>/trash<%= accountId > 0 ? '?account_id=' + accountId : '' %>" data-nav="trash" class="<%= active === 'trash' ? 'active' : '' %>">🗑️ 回收站</a>
   <span class="mode"><%= mode === 'write' ? '✏️ 可写' : '👁️ 只读' %></span>
 </nav>
 <main><%- body %></main>

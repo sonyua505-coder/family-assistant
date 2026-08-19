@@ -4,54 +4,58 @@
 <% } else { %>
   <% accounts.forEach(function(a){ %>
     <div class="card">
-      <h2><%= a.name %>
+      <h2>
+        <%= a.name %>
         <span class="badge <%= a.type === 'family' ? 'settled' : 'pending' %>"><%= a.type === 'family' ? '👨‍👩‍👧 家庭' : '👤 个人' %></span>
-        <span class="muted">（<%= a.role %>）</span>
+        <span class="muted">（<%= a.roleText %>）</span>
       </h2>
 
-      <div class="stat-row">
-        <div class="stat income">
-          <div class="label">💸 本月收入</div>
-          <div class="value income"><%= a.income %> 元</div>
+      <!-- 日常账单 -->
+      <section class="seg">
+        <h3>🧾 日常账单</h3>
+        <div class="stat-row">
+          <div class="stat income"><div class="label">💸 本月收入</div><div class="value income"><%= comma(a.daily.income) %> 元</div></div>
+          <div class="stat expense"><div class="label">🧾 本月支出</div><div class="value expense"><%= comma(a.daily.expense) %> 元</div></div>
+          <div class="stat balance"><div class="label">💰 本月结余</div><div class="value <%= a.daily.balanceClass %>"><%= comma(a.daily.balance) %> 元</div></div>
+          <div class="stat"><div class="label">📝 本月笔数</div><div class="value"><%= a.daily.count %></div></div>
         </div>
-        <div class="stat expense">
-          <div class="label">🧾 本月支出</div>
-          <div class="value expense"><%= a.expense %> 元</div>
+        <div class="toolbar">
+          <a class="btn" href="/w/<%= token %>/bills?account_id=<%= a.id %>">账单</a>
+          <a class="btn" href="/w/<%= token %>/stats?account_id=<%= a.id %>">统计</a>
+          <a class="btn" href="/w/<%= token %>/aa?account_id=<%= a.id %>">待收</a>
+          <a class="btn" href="/w/<%= token %>/trash?account_id=<%= a.id %>&kind=daily">回收站</a>
         </div>
-        <div class="stat balance">
-          <div class="label">💰 本月结余</div>
-          <div class="value <%= a.balanceClass %>"><%= a.balance %> 元</div>
-        </div>
-        <div class="stat mom">
-          <div class="label">📈 支出环比上月</div>
-          <div class="value <%= a.momClass %>"><%= a.momClass === 'up' ? '▲' : (a.momClass === 'down' ? '▼' : '') %> <%= a.momText %></div>
-        </div>
-        <div class="stat mom">
-          <div class="label">✅ 未完成待办</div>
-          <div class="value"><%= a.pendingTasks %></div>
-        </div>
-        <div class="stat mom">
-          <div class="label">🔨 工作欠款</div>
-          <div class="value <%= a.workOwedClass %>"><%= a.workOwed %> 元</div>
-        </div>
-      </div>
+      </section>
 
-      <% if (a.topCategories.length > 0) { %>
-      <div class="muted" style="margin:10px 0 6px">本月支出 Top：
-        <% a.topCategories.forEach(function(c, i){ %>
-          <span class="cat cat-<%= c.category %>"><%= c.category %> <b><%= c.amountYuan %></b>元</span><%= i < a.topCategories.length - 1 ? '、' : '' %>
-        <% }) %>
-      </div>
-      <% } %>
+      <!-- 工作账单 -->
+      <section class="seg">
+        <h3>🔨 工作账单</h3>
+        <div class="stat-row">
+          <div class="stat income"><div class="label">💰 应收</div><div class="value income"><%= comma(a.work.receivable) %> 元</div></div>
+          <div class="stat"><div class="label">✅ 已收</div><div class="value"><%= comma(a.work.paid) %> 元</div></div>
+          <div class="stat expense"><div class="label">⚠️ 欠款</div><div class="value <%= a.work.owedClass %>"><%= comma(a.work.owed) %> 元</div></div>
+          <div class="stat"><div class="label">📑 笔数</div><div class="value"><%= a.work.count %></div></div>
+        </div>
+        <div class="toolbar">
+          <a class="btn" href="/w/<%= token %>/work?account_id=<%= a.id %>">工作账单</a>
+          <a class="btn" href="/w/<%= token %>/work/stats?account_id=<%= a.id %>">统计</a>
+          <a class="btn" href="/w/<%= token %>/trash?account_id=<%= a.id %>&kind=work">回收站</a>
+        </div>
+      </section>
 
-      <div class="toolbar">
-        <a href="/w/<%= token %>/bills?account_id=<%= a.id %>"><button class="ghost">🧾 账单</button></a>
-        <a href="/w/<%= token %>/tasks?account_id=<%= a.id %>"><button class="ghost">✅ 待办</button></a>
-        <a href="/w/<%= token %>/work?account_id=<%= a.id %>"><button class="ghost">🔨 工作</button></a>
-        <a href="/w/<%= token %>/stats?account_id=<%= a.id %>"><button class="ghost">📈 统计</button></a>
-        <a href="/w/<%= token %>/aa?account_id=<%= a.id %>"><button class="ghost">💰 待收</button></a>
-        <a href="/w/<%= token %>/export?account_id=<%= a.id %>"><button class="ghost">⬇️ 导出</button></a>
-      </div>
+      <!-- 代办 -->
+      <section class="seg">
+        <h3>✅ 代办</h3>
+        <div class="stat-row">
+          <div class="stat"><div class="label">⏳ 未完成</div><div class="value"><%= a.tasks.pending %></div></div>
+          <div class="stat"><div class="label">✔️ 已完成</div><div class="value"><%= a.tasks.done %></div></div>
+        </div>
+        <div class="toolbar">
+          <a class="btn" href="/w/<%= token %>/tasks?account_id=<%= a.id %>">待办</a>
+          <a class="btn" href="/w/<%= token %>/tasks/stats?account_id=<%= a.id %>">统计</a>
+          <a class="btn" href="/w/<%= token %>/trash?account_id=<%= a.id %>&kind=task">回收站</a>
+        </div>
+      </section>
     </div>
   <% }) %>
 <% } %>

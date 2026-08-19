@@ -5,11 +5,7 @@
 <% } else { %>
 
 <form class="toolbar" method="get" action="/w/<%= token %>/work/stats">
-  <select name="account_id">
-    <% accounts.forEach(function(a){ %>
-      <option value="<%= a.id %>" <%= a.id === accountId ? 'selected' : '' %>><%= a.name %></option>
-    <% }) %>
-  </select>
+  <select name="account_id"><%- opt(accounts, accountId, 'work') %></select>
   <input type="date" name="from" value="<%= from %>">
   <input type="date" name="to" value="<%= to %>">
   <button>查看</button>
@@ -17,9 +13,9 @@
 
 <div class="stat-row">
   <div class="stat balance"><div class="label">📋 账单数</div><div class="value"><%= billCount %></div></div>
-  <div class="stat income"><div class="label">💵 应收</div><div class="value"><%= receivable %> 元</div></div>
-  <div class="stat expense"><div class="label">💰 已收</div><div class="value expense"><%= paid %> 元</div></div>
-  <div class="stat mom"><div class="label">📉 欠款</div><div class="value <%= owedClass %>"><%= owed %> 元</div></div>
+  <div class="stat income"><div class="label">💵 应收</div><div class="value"><%= comma(receivable) %> 元</div></div>
+  <div class="stat expense"><div class="label">💰 已收</div><div class="value expense"><%= comma(paid) %> 元</div></div>
+  <div class="stat mom"><div class="label">📉 欠款</div><div class="value <%= owedClass %>"><%= comma(owed) %> 元</div></div>
 </div>
 
 <div class="card">
@@ -32,9 +28,9 @@
     <tr>
       <td><%= c.client_name %></td>
       <td class="num"><%= c.bill_count %></td>
-      <td class="num amount"><%= c.receivable %></td>
-      <td class="num amount income"><%= c.paid %></td>
-      <td class="num amount <%= c.owed_class %>"><%= c.owed %></td>
+      <td class="num amount"><%= comma(c.receivable) %></td>
+      <td class="num amount income"><%= comma(c.paid) %></td>
+      <td class="num amount <%= c.owed_class %>"><%= comma(c.owed) %></td>
     </tr>
     <% }) %>
   </table>
@@ -52,9 +48,9 @@
     <tr>
       <td><%= m.month %></td>
       <td class="num"><%= m.bill_count %></td>
-      <td class="num amount"><%= m.receivable %></td>
-      <td class="num amount income"><%= m.paid %></td>
-      <td class="num amount"><%= m.owed %></td>
+      <td class="num amount"><%= comma(m.receivable) %></td>
+      <td class="num amount income"><%= comma(m.paid) %></td>
+      <td class="num amount"><%= comma(m.owed) %></td>
     </tr>
     <% }) %>
   </table>

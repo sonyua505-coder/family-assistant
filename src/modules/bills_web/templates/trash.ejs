@@ -5,17 +5,18 @@
 <% } else { %>
 
 <form class="toolbar" method="get" action="/w/<%= token %>/trash">
-  <select name="account_id">
-    <% accounts.forEach(function(a){ %>
-      <option value="<%= a.id %>" <%= a.id === accountId ? 'selected' : '' %>><%= a.name %></option>
-    <% }) %>
+  <select name="account_id"><%- opt(accounts, accountId) %></select>
+  <select name="kind">
+    <option value="daily" <%= kind === 'daily' ? 'selected' : '' %>>🧾 日常账单</option>
+    <option value="work" <%= kind === 'work' ? 'selected' : '' %>>🔨 工作账单</option>
+    <option value="task" <%= kind === 'task' ? 'selected' : '' %>>✅ 待办</option>
   </select>
   <button>切换</button>
 </form>
 
 <% if (items.length === 0) { %>
-  <div class="empty">回收站为空。</div>
-<% } else { %>
+  <div class="empty">该账本的<%= kind === 'work' ? '工作账单' : kind === 'task' ? '待办' : '日常账单' %>回收站为空。</div>
+<% } else if (kind === 'daily') { %>
 <div class="table-wrap">
 <table>
 <tr><th>删除时间</th><th>日期</th><th>备注</th><th>分类</th><th class="num">金额</th><% if (mode === 'write') { %><th>操作</th><% } %></tr>
@@ -25,13 +26,67 @@
   <td style="white-space:nowrap"><%= b.occurred_at %></td>
   <td><%= b.note %></td>
   <td><span class="cat cat-<%= b.category %>"><%= b.category %></span></td>
-  <td class="num amount <%= b.type === 'income' ? 'income' : 'expense' %>"><%= b.type === 'income' ? '+' : '-' %><%= b.amountYuan %></td>
+  <td class="num amount <%= b.type === 'income' ? 'income' : 'expense' %>"><%= b.type === 'income' ? '+' : '-' %><%= comma(b.amountYuan) %></td>
   <% if (mode === 'write') { %>
   <td style="white-space:nowrap">
     <form class="inline" method="post" action="/w/<%= token %>/bills/<%= b.id %>/restore">
       <button>♻️ 恢复</button>
     </form>
     <form class="inline" method="post" action="/w/<%= token %>/bills/<%= b.id %>/purge">
+      <button class="danger" title="彻底删除（不可恢复）">🗑️ 彻底删</button>
+    </form>
+  </td>
+  <% } %>
+</tr>
+<% }) %>
+</table>
+</div>
+<% } else if (kind === 'work') { %>
+<div class="table-wrap">
+<table>
+<tr><th>删除时间</th><th>委托方</th><th>地址</th><th>日期</th><th>备注</th><th class="num">金额</th><% if (mode === 'write') { %><th>操作</th><% } %></tr>
+<% items.forEach(function(b){ %>
+<tr>
+  <td style="white-space:nowrap"><%= b.deleted_at %></td>
+  <td><%= b.client_name %></td>
+  <td class="muted"><%= b.address %></td>
+  <td style="white-space:nowrap"><%= b.occurred_at %></td>
+  <td><%= b.note %></td>
+  <td class="num amount"><%= comma(b.amountYuan) %></td>
+  <% if (mode === 'write') { %>
+  <td style="white-space:nowrap">
+    <form class="inline" method="post" action="/w/<%= token %>/work/<%= b.id %>/restore">
+      <input type="hidden" name="kind" value="work">
+      <button>♻️ 恢复</button>
+    </form>
+    <form class="inline" method="post" action="/w/<%= token %>/work/<%= b.id %>/purge">
+      <input type="hidden" name="kind" value="work">
+      <button class="danger" title="彻底删除（不可恢复）">🗑️ 彻底删</button>
+    </form>
+  </td>
+  <% } %>
+</tr>
+<% }) %>
+</table>
+</div>
+<% } else { %>
+<div class="table-wrap">
+<table>
+<tr><th>删除时间</th><th>内容</th><th>分类</th><th>状态</th><% if (mode === 'write') { %><th>操作</th><% } %></tr>
+<% items.forEach(function(t){ %>
+<tr>
+  <td style="white-space:nowrap"><%= t.deleted_at %></td>
+  <td><%= t.content %></td>
+  <td><span class="cat cat-<%= t.category %>"><%= t.category %></span></td>
+  <td><span class="badge <%= t.is_done ? 'settled' : 'pending' %>"><%= t.is_done ? '✅ 已完成' : '🕐 未完成' %></span></td>
+  <% if (mode === 'write') { %>
+  <td style="white-space:nowrap">
+    <form class="inline" method="post" action="/w/<%= token %>/tasks/<%= t.id %>/restore">
+      <input type="hidden" name="kind" value="task">
+      <button>♻️ 恢复</button>
+    </form>
+    <form class="inline" method="post" action="/w/<%= token %>/tasks/<%= t.id %>/purge">
+      <input type="hidden" name="kind" value="task">
       <button class="danger" title="彻底删除（不可恢复）">🗑️ 彻底删</button>
     </form>
   </td>

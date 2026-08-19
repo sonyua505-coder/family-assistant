@@ -6,12 +6,15 @@
   <form method="post" action="/w/<%= token %>/tasks/<%= task.id %>/update">
     <div class="toolbar">
       <input type="text" name="content" value="<%= task.content %>" placeholder="内容" required style="flex:1">
-      <input type="text" name="category" value="<%= task.category %>" placeholder="分类">
-      <input type="datetime-local" name="remind_at" value="<%= task.remind_at %>">
+      <input type="text" name="category" list="taskCatList" value="<%= task.category %>" placeholder="分类">
+      <datalist id="taskCatList">
+        <% (taskCats || []).forEach(function(c){ %><option value="<%= c %>"><% }) %>
+      </datalist>
+      <input type="text" name="remind_at" value="<%= task.remind_at ? task.remind_at.slice(0, 16) : '' %>" placeholder="提醒：YYYY-MM-DD 或 YYYY-MM-DD HH:MM">
     </div>
     <div class="toolbar">
       <button>保存修改</button>
-      <a href="/w/<%= token %>/tasks?account_id=<%= accountId %>"><button class="ghost" type="button">返回</button></a>
+      <a class="btn" href="/w/<%= token %>/tasks?account_id=<%= accountId %>">返回</a>
     </div>
   </form>
   <div class="muted" style="margin-top:8px">待办 #<%= task.id %> · 修改提醒时间会重新触发提醒。</div>

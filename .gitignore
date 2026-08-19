@@ -26,3 +26,6 @@ Dockerfile
 docker-compose.yml
 .dockerignore
 deploy/
+
+# WorkBuddy 项目内部数据（记忆/会话产物，不随代码库分发）
+.workbuddy/

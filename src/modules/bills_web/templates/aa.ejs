@@ -5,11 +5,7 @@
 <% } else { %>
 
 <form class="toolbar" method="get" action="/w/<%= token %>/aa">
-  <select name="account_id">
-    <% accounts.forEach(function(a){ %>
-      <option value="<%= a.id %>" <%= a.id === accountId ? 'selected' : '' %>><%= a.name %></option>
-    <% }) %>
-  </select>
+  <select name="account_id"><%- opt(accounts, accountId, 'daily') %></select>
   <button>切换</button>
 </form>
 
@@ -24,7 +20,7 @@
   <tr>
     <td style="white-space:nowrap"><%= p.occurred_at %></td>
     <td><%= p.note %></td>
-    <td class="num amount expense"><%= p.amountYuan %></td>
+    <td class="num amount expense"><%= comma(p.amountYuan) %></td>
     <td>👤 <%= p.payer %></td>
     <td><span class="badge pending">🕐 <%= u %></span></td>
     <% if (mode === 'write') { %>

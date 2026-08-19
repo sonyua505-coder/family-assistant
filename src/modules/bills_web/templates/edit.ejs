@@ -21,7 +21,7 @@
     <div class="toolbar">
       <input type="text" name="participants" value="<%= bill.participantsText %>" placeholder="AA参与人，逗号分隔（可选）" style="flex:1">
       <button>保存修改</button>
-      <a href="/w/<%= token %>/bills?account_id=<%= accountId %>"><button class="ghost" type="button">返回</button></a>
+      <a class="btn" href="/w/<%= token %>/bills?account_id=<%= accountId %>">返回</a>
     </div>
   </form>
   <div class="muted" style="margin-top:8px">账单 #<%= bill.id %> · 修改后 AA 参与人会重新计算结算状态。</div>

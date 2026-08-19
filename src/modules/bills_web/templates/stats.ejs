@@ -5,11 +5,7 @@
 <% } else { %>
 
 <form class="toolbar" method="get" action="/w/<%= token %>/stats">
-  <select name="account_id">
-    <% accounts.forEach(function(a){ %>
-      <option value="<%= a.id %>" <%= a.id === accountId ? 'selected' : '' %>><%= a.name %></option>
-    <% }) %>
-  </select>
+  <select name="account_id"><%- opt(accounts, accountId, 'daily') %></select>
   <input type="number" name="year" min="2000" max="2100" value="<%= year %>" placeholder="年份">
   <select name="month">
     <option value="">全年</option>
@@ -23,15 +19,15 @@
 <div class="stat-row">
   <div class="stat income">
     <div class="label">💸 收入</div>
-    <div class="value income"><%= income %> 元</div>
+    <div class="value income"><%= comma(income) %> 元</div>
   </div>
   <div class="stat expense">
     <div class="label">🧾 支出</div>
-    <div class="value expense"><%= expense %> 元</div>
+    <div class="value expense"><%= comma(expense) %> 元</div>
   </div>
   <div class="stat balance">
     <div class="label">💰 结余</div>
-    <div class="value <%= income - expense >= 0 ? 'income' : 'expense' %>"><%= (income - expense).toFixed(income - expense % 1 ? 2 : 0) %> 元</div>
+    <div class="value <%= income - expense >= 0 ? 'income' : 'expense' %>"><%= comma((income - expense).toFixed(income - expense % 1 ? 2 : 0)) %> 元</div>
   </div>
 </div>
 
@@ -45,7 +41,7 @@
     <% byCategory.forEach(function(c){ %>
     <tr>
       <td><span class="cat cat-<%= c.category %>"><%= c.category %></span></td>
-      <td class="num amount"><%= c.amountYuan %></td>
+      <td class="num amount"><%= comma(c.amountYuan) %></td>
       <td class="num"><%= c.count %></td>
       <td>
         <div class="bar-row">
@@ -70,8 +66,8 @@
     <% trend.forEach(function(t){ %>
     <tr>
       <td><%= t.month %></td>
-      <td class="num amount income"><%= t.incomeYuan %></td>
-      <td class="num amount expense"><%= t.expenseYuan %></td>
+      <td class="num amount income"><%= comma(t.incomeYuan) %></td>
+      <td class="num amount expense"><%= comma(t.expenseYuan) %></td>
       <td>
         <div class="bar-row">
           <div class="bar-track"><div class="bar" style="width:<%= tmax ? Math.round(t.expense / tmax * 100) : 0 %>%"></div></div>

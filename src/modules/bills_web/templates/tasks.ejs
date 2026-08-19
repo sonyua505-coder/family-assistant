@@ -4,36 +4,57 @@
 
 <% if (accounts.length === 0) { %>
   <div class="empty">还没有账本。</div>
+<% } else if (trash) { %>
+
+<%- switcher({ token: token, action: '/w/' + token + '/tasks', accounts: accounts, accountId: accountId, hidden: { trash: '1' }, links: [
+  { href: '/w/' + token + '/tasks/stats?account_id=' + accountId, label: '📊 统计' },
+  { href: '/w/' + token + '/tasks/export?account_id=' + accountId, label: '⬇️ 导出' },
+  { href: '/w/' + token + '/tasks?account_id=' + accountId, label: '⬅ 返回待办', className: 'right' },
+] }) %>
+
 <% } else { %>
 
 <form class="toolbar" method="get" action="/w/<%= token %>/tasks">
-  <select name="account_id">
-    <% accounts.forEach(function(a){ %>
-      <option value="<%= a.id %>" <%= a.id === accountId ? 'selected' : '' %>><%= a.name %></option>
+  <select name="account_id"><%- opt(accounts, accountId) %></select>
+  <select name="status">
+    <option value="">全部状态</option>
+    <option value="undone" <%= status === 'undone' ? 'selected' : '' %>>未完成</option>
+    <option value="done" <%= status === 'done' ? 'selected' : '' %>>已完成</option>
+  </select>
+  <select name="category">
+    <option value="">全部分类</option>
+    <% taskCats.forEach(function(c){ %>
+      <option value="<%= c %>" <%= c === category ? 'selected' : '' %>><%= c %></option>
     <% }) %>
   </select>
-  <% if (trash) { %>
-    <input type="hidden" name="trash" value="1">
-  <% } %>
-  <button>切换账本</button>
-  <a href="/w/<%= token %>/tasks/stats?account_id=<%= accountId %>"><button class="ghost">📊 统计</button></a>
-  <a href="/w/<%= token %>/tasks/export?account_id=<%= accountId %>"><button class="ghost">⬇️ 导出</button></a>
-  <a href="/w/<%= token %>/tasks?account_id=<%= accountId %><%= trash ? '' : '&trash=1' %>"><button class="ghost" style="margin-left:auto"><%= trash ? '⬅ 返回待办' : '🗑️ 回收站' %></button></a>
+  <input type="text" name="q" value="<%= q %>" placeholder="关键词（内容）">
+  <button>筛选</button>
 </form>
 
-<% if (!trash && mode === 'write') { %>
+<p class="muted" style="margin:0 0 14px">
+  <a class="btn" href="/w/<%= token %>/tasks/stats?account_id=<%= accountId %>">📊 统计</a>
+  <a class="btn" href="<%= exportHref %>">⬇️ 导出当前筛选 CSV</a>
+  <a class="btn" href="/w/<%= token %>/trash?account_id=<%= accountId %>&kind=task">🗑️ 回收站</a>
+</p>
+
+<% if (mode === 'write') { %>
 <div class="card">
   <h2>新增待办</h2>
   <form method="post" action="/w/<%= token %>/tasks">
     <input type="hidden" name="account_id" value="<%= accountId %>">
     <div class="toolbar">
       <input type="text" name="content" placeholder="内容" required>
-      <input type="text" name="category" placeholder="分类（可选）">
-      <input type="datetime-local" name="remind_at">
+      <input type="text" name="category" list="taskCatList" placeholder="分类（可选，可输入新分类）">
+      <datalist id="taskCatList">
+        <% taskCats.forEach(function(c){ %><option value="<%= c %>"><% }) %>
+      </datalist>
+      <input type="text" name="remind_at" placeholder="提醒：YYYY-MM-DD 或 YYYY-MM-DD HH:MM">
       <button>新增</button>
     </div>
   </form>
 </div>
+<% } %>
+
 <% } %>
 
 <% if (items.length === 0) { %>
@@ -69,7 +90,7 @@
   <td class="muted" style="white-space:nowrap"><%= t.remind_at %></td>
   <% if (mode === 'write') { %>
   <td style="white-space:nowrap">
-    <a href="/w/<%= token %>/tasks/<%= t.id %>/edit"><button class="ghost" title="编辑">✏️</button></a>
+    <a class="btn icon" href="/w/<%= token %>/tasks/<%= t.id %>/edit" title="编辑">✏️</a>
     <% if (!t.is_done) { %>
       <form class="inline" method="post" action="/w/<%= token %>/tasks/<%= t.id %>/done"><button title="完成">✅ 完成</button></form>
     <% } else { %>
@@ -83,6 +104,4 @@
 </table>
 </div>
 <div class="muted">共 <%= total %> 条待办（未完成在前）</div>
-<% } %>
-
 <% } %>

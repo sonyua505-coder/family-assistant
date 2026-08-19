@@ -7,11 +7,7 @@
 <% } else { %>
 
 <form class="toolbar" method="get" action="/w/<%= token %>/bills">
-  <select name="account_id">
-    <% accounts.forEach(function(a){ %>
-      <option value="<%= a.id %>" <%= a.id === accountId ? 'selected' : '' %>><%= a.name %></option>
-    <% }) %>
-  </select>
+  <select name="account_id"><%- opt(accounts, accountId, 'daily') %></select>
   <input type="month" name="month" value="<%= month %>" placeholder="月份">
   <select name="category">
     <option value="">全部分类</option>
@@ -34,6 +30,12 @@
   <input type="text" name="participant" value="<%= participant %>" placeholder="参与人">
   <button>筛选</button>
 </form>
+
+<p class="muted" style="margin:0 0 14px">
+  <a class="btn" href="/w/<%= token %>/stats?account_id=<%= accountId %>">📊 统计</a>
+  <a class="btn" href="<%= exportHref %>">⬇️ 导出当前筛选 CSV</a>
+  <a class="btn" href="/w/<%= token %>/trash?account_id=<%= accountId %>&kind=daily">🗑️ 回收站</a>
+</p>
 
 <% if (mode === 'write') { %>
 <div class="card">
@@ -69,12 +71,12 @@
   <td style="white-space:nowrap"><%= b.occurred_at %></td>
   <td><span class="cat cat-<%= b.category %>"><%= b.category %></span></td>
   <td><%= b.note %></td>
-  <td class="num amount <%= b.type === 'income' ? 'income' : 'expense' %>"><%= b.type === 'income' ? '+' : '-' %><%= b.amountYuan %></td>
+  <td class="num amount <%= b.type === 'income' ? 'income' : 'expense' %>"><%= b.type === 'income' ? '+' : '-' %><%= comma(b.amountYuan) %></td>
   <td><span class="badge <%= b.status %>"><%= b.status === 'pending' ? '🕐 待结算' : '✅ 已结清' %></span></td>
   <td class="muted"><%= b.participantsText %></td>
   <% if (mode === 'write') { %>
   <td style="white-space:nowrap">
-    <a href="/w/<%= token %>/bills/<%= b.id %>/edit"><button class="ghost" title="编辑账单">✏️</button></a>
+    <a class="btn icon" href="/w/<%= token %>/bills/<%= b.id %>/edit" title="编辑账单">✏️</a>
     <form class="inline" method="post" action="/w/<%= token %>/bills/<%= b.id %>/delete">
       <button class="danger" title="软删除，可回收站恢复">🗑️</button>
     </form>

@@ -4,24 +4,43 @@
 
 <% if (accounts.length === 0) { %>
   <div class="empty">还没有账本。</div>
+<% } else if (trash) { %>
+
+<%- switcher({ token: token, action: '/w/' + token + '/work', accounts: accounts, accountId: accountId, series: 'work', hidden: { trash: '1' }, links: [
+  { href: '/w/' + token + '/work/stats?account_id=' + accountId, label: '📊 统计' },
+  { href: '/w/' + token + '/work/export?account_id=' + accountId, label: '⬇️ 导出' },
+  { href: '/w/' + token + '/work?account_id=' + accountId, label: '⬅ 返回工作记账', className: 'right' },
+] }) %>
+
 <% } else { %>
 
 <form class="toolbar" method="get" action="/w/<%= token %>/work">
-  <select name="account_id">
-    <% accounts.forEach(function(a){ %>
-      <option value="<%= a.id %>" <%= a.id === accountId ? 'selected' : '' %>><%= a.name %></option>
+  <select name="account_id"><%- opt(accounts, accountId, 'work') %></select>
+  <select name="status">
+    <option value="">全部状态</option>
+    <option value="unsettled" <%= status === 'unsettled' ? 'selected' : '' %>>未结算</option>
+    <option value="partial" <%= status === 'partial' ? 'selected' : '' %>>部分结算</option>
+    <option value="settled" <%= status === 'settled' ? 'selected' : '' %>>已结清</option>
+  </select>
+  <select name="client_id">
+    <option value="">全部委托方</option>
+    <% clients.forEach(function(c){ %>
+      <option value="<%= c.id %>" <%= String(c.id) === client_id ? 'selected' : '' %>><%= c.name %></option>
     <% }) %>
   </select>
-  <% if (trash) { %>
-    <input type="hidden" name="trash" value="1">
-  <% } %>
-  <button>切换账本</button>
-  <a href="/w/<%= token %>/work/stats?account_id=<%= accountId %>"><button class="ghost">📊 统计</button></a>
-  <a href="/w/<%= token %>/work/export?account_id=<%= accountId %>"><button class="ghost">⬇️ 导出</button></a>
-  <a href="/w/<%= token %>/work?account_id=<%= accountId %><%= trash ? '' : '&trash=1' %>"><button class="ghost" style="margin-left:auto"><%= trash ? '⬅ 返回工作记账' : '🗑️ 回收站' %></button></a>
+  <input type="text" name="keyword" value="<%= keyword %>" placeholder="地址/备注关键词">
+  <input type="date" name="from" value="<%= from %>" title="起始日期">
+  <input type="date" name="to" value="<%= to %>" title="结束日期">
+  <button>筛选</button>
 </form>
 
-<% if (!trash && mode === 'write') { %>
+<p class="muted" style="margin:0 0 14px">
+  <a class="btn" href="/w/<%= token %>/work/stats?account_id=<%= accountId %>">📊 统计</a>
+  <a class="btn" href="<%= exportHref %>">⬇️ 导出当前筛选 CSV</a>
+  <a class="btn" href="/w/<%= token %>/trash?account_id=<%= accountId %>&kind=work">🗑️ 回收站</a>
+</p>
+
+<% if (mode === 'write') { %>
 <div class="card">
   <h2>新建工作账单</h2>
   <form method="post" action="/w/<%= token %>/work">
@@ -33,9 +52,9 @@
       </select>
       <input type="text" name="address" placeholder="安装地点">
       <input type="text" name="contact" placeholder="联系人">
-      <input type="date" name="occurred_at">
+      <input type="date" name="occurred_at" placeholder="日期">
     </div>
-    <p class="muted" style="margin:10px 0 6px">安装内容（最多 4 行，品名留空的行忽略；单价留空自动按委托方单价表带出，单位：元）</p>
+    <p class="muted" style="margin:10px 0 6px">安装内容（最多 4 行，品名留空的行忽略；单价留空自动按委托方单价表带出，单位：元）· 日期留空默认今天</p>
     <% for (var i = 0; i < 4; i++) { %>
     <div class="toolbar">
       <input type="text" name="i<%= i %>_name" placeholder="品名（如 欧派木门）">
@@ -50,6 +69,8 @@
     </div>
   </form>
 </div>
+<% } %>
+
 <% } %>
 
 <% if (items.length === 0) { %>
@@ -85,13 +106,13 @@
   <td><%= b.client_name %></td>
   <td class="muted"><%= b.address %></td>
   <td class="muted"><%= b.contact %></td>
-  <td class="num amount"><%= b.receivable %></td>
-  <td class="num amount income"><%= b.paid %></td>
-  <td class="num amount <%= b.owed_class %>"><%= b.owed %></td>
+  <td class="num amount"><%= comma(b.receivable) %></td>
+  <td class="num amount income"><%= comma(b.paid) %></td>
+  <td class="num amount <%= b.owed_class %>"><%= comma(b.owed) %></td>
   <td style="white-space:nowrap"><span class="badge <%= b.status === 'settled' ? 'settled' : 'pending' %>"><%= b.status === 'settled' ? '✅ 已结清' : b.status === 'partial' ? '🕐 部分结算' : '⏳ 未结算' %></span></td>
   <% if (mode === 'write') { %>
   <td style="white-space:nowrap">
-    <a href="/w/<%= token %>/work/<%= b.id %>/edit"><button class="ghost" title="编辑">✏️</button></a>
+    <a class="btn icon" href="/w/<%= token %>/work/<%= b.id %>/edit" title="编辑">✏️</a>
     <% if (b.status !== 'settled') { %>
     <form class="inline" method="post" action="/w/<%= token %>/work/<%= b.id %>/settle">
       <input type="number" name="amount" min="0.01" step="0.01" placeholder="收款(元)" style="width:90px" required>
@@ -106,6 +127,4 @@
 </table>
 </div>
 <div class="muted">共 <%= total %> 张工作账单</div>
-<% } %>
-
 <% } %>

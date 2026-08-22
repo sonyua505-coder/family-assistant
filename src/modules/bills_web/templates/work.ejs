@@ -36,7 +36,10 @@
 
 <p class="muted" style="margin:0 0 14px">
   <a class="btn" href="/w/<%= token %>/work/stats?account_id=<%= accountId %>">📊 统计</a>
-  <a class="btn" href="<%= exportHref %>">⬇️ 导出当前筛选 CSV</a>
+  <a class="btn" href="<%= exportHref %>">⬇️ 导出（带算式）</a>
+  <a class="btn" href="<%= exportHref %>&mode=summary">⬇️ 导出（简表）</a>
+  <a class="btn" href="/w/<%= token %>/work/clients?account_id=<%= accountId %>">👥 委托方</a>
+  <a class="btn" href="/w/<%= token %>/work/prices?account_id=<%= accountId %>">💰 单价表</a>
   <a class="btn" href="/w/<%= token %>/trash?account_id=<%= accountId %>&kind=work">🗑️ 回收站</a>
 </p>
 
@@ -45,27 +48,58 @@
   <h2>新建工作账单</h2>
   <form method="post" action="/w/<%= token %>/work">
     <input type="hidden" name="account_id" value="<%= accountId %>">
-    <div class="toolbar">
-      <select name="client_id" required>
-        <option value="">选择委托方</option>
-        <% clients.forEach(function(c){ %><option value="<%= c.id %>"><%= c.name %></option><% }) %>
-      </select>
-      <input type="text" name="address" placeholder="安装地点">
-      <input type="text" name="contact" placeholder="联系人">
-      <input type="date" name="occurred_at" placeholder="日期">
+    <div class="form-section">
+      <div class="form-section-title">基本信息</div>
+      <div class="form-grid">
+        <label class="field"><span>委托方</span>
+          <select name="client_id" required>
+            <option value="">选择委托方</option>
+            <% clients.forEach(function(c){ %><option value="<%= c.id %>"><%= c.name %></option><% }) %>
+          </select>
+        </label>
+        <label class="field"><span>日期</span>
+          <input type="date" name="occurred_at" placeholder="默认今天">
+        </label>
+        <label class="field"><span>安装地点</span>
+          <input type="text" name="address" placeholder="如 XX小区3栋501">
+        </label>
+        <label class="field"><span>联系人</span>
+          <input type="text" name="contact" placeholder="联系人">
+        </label>
+      </div>
     </div>
-    <p class="muted" style="margin:10px 0 6px">安装内容（最多 4 行，品名留空的行忽略；单价留空自动按委托方单价表带出，单位：元）· 日期留空默认今天</p>
-    <% for (var i = 0; i < 4; i++) { %>
-    <div class="toolbar">
-      <input type="text" name="i<%= i %>_name" placeholder="品名（如 欧派木门）">
-      <input type="number" name="i<%= i %>_qty" min="0" step="0.01" placeholder="数量">
-      <input type="text" name="i<%= i %>_unit" placeholder="单位">
-      <input type="number" name="i<%= i %>_unit_price" min="0" step="0.01" placeholder="单价(元)">
+    <div class="form-section">
+      <div class="form-section-title">安装内容</div>
+      <% for (var i = 0; i < 4; i++) { %>
+      <div class="item-card">
+        <p class="item-card-title">第 <%= i + 1 %> 行</p>
+        <div class="form-grid">
+          <label class="field"><span>品名</span>
+            <input type="text" name="i<%= i %>_name" placeholder="如 欧派木门">
+          </label>
+          <label class="field"><span>数量</span>
+            <input type="number" name="i<%= i %>_qty" min="0" step="0.01" placeholder="数量">
+          </label>
+          <label class="field"><span>单位</span>
+            <input type="text" name="i<%= i %>_unit" placeholder="单位">
+          </label>
+          <label class="field"><span>单价（元）</span>
+            <input type="number" name="i<%= i %>_unit_price" min="0" step="0.01" placeholder="单价(元)">
+          </label>
+        </div>
+        <label class="field" style="margin-top:8px"><span>明细备注</span>
+          <input type="text" name="i<%= i %>_note" placeholder="该行备注（可选）">
+        </label>
+      </div>
+      <% } %>
+      <p class="muted">最多 4 行，品名留空的行忽略；单价留空自动按委托方单价表带出（单位：元）；日期留空默认今天。</p>
     </div>
-    <% } %>
-    <div class="toolbar">
-      <input type="text" name="note" placeholder="整单备注（可选）">
-      <button>记单</button>
+    <div class="form-section">
+      <div class="form-section-title">整单备注</div>
+      <div class="form-row">
+        <input type="text" name="note" placeholder="整单备注（可选）" style="flex:1">
+        <button>记单</button>
+      </div>
     </div>
   </form>
 </div>
@@ -77,53 +111,81 @@
   <div class="empty"><%= trash ? '回收站为空。' : '暂无工作账单' %></div>
 <% } else if (trash) { %>
 <div class="table-wrap">
-<table>
+<table class="card-list">
+<thead>
 <tr><th>日期</th><th>委托方</th><th>地点</th><th>联系人</th><th>删除时间</th><% if (mode === 'write') { %><th>操作</th><% } %></tr>
+</thead>
+<tbody>
 <% items.forEach(function(b){ %>
 <tr>
-  <td style="white-space:nowrap"><%= b.occurred_at %></td>
-  <td><%= b.client_name %></td>
-  <td class="muted"><%= b.address %></td>
-  <td class="muted"><%= b.contact %></td>
-  <td class="muted" style="white-space:nowrap"><%= b.deleted_at %></td>
+  <td style="white-space:nowrap" data-label="日期"><%= b.occurred_at %></td>
+  <td data-label="委托方"><%= b.client_name %></td>
+  <td class="muted" data-label="地点"><%= b.address %></td>
+  <td class="muted" data-label="联系人"><%= b.contact %></td>
+  <td class="muted" style="white-space:nowrap" data-label="删除时间"><%= b.deleted_at %></td>
   <% if (mode === 'write') { %>
-  <td style="white-space:nowrap">
-    <form class="inline" method="post" action="/w/<%= token %>/work/<%= b.id %>/restore"><button>♻️ 恢复</button></form>
-    <form class="inline" method="post" action="/w/<%= token %>/work/<%= b.id %>/purge"><button class="danger" title="彻底删除（不可恢复，明细/结算一并清除）">🗑️ 彻底删</button></form>
+  <td class="td-actions">
+    <form class="inline" data-keep method="post" action="/w/<%= token %>/work/<%= b.id %>/restore"><button>♻️ 恢复</button></form>
+    <form class="inline" data-keep method="post" action="/w/<%= token %>/work/<%= b.id %>/purge"><button class="danger" title="彻底删除（不可恢复，明细/结算一并清除）">🗑️ 彻底删</button></form>
   </td>
   <% } %>
 </tr>
 <% }) %>
+</tbody>
 </table>
 </div>
 <% } else { %>
 <div class="table-wrap">
-<table>
+<table class="card-list">
+<thead>
 <tr><th>日期</th><th>委托方</th><th>地点</th><th>联系人</th><th class="num">应收</th><th class="num">已收</th><th class="num">欠款</th><th>状态</th><% if (mode === 'write') { %><th>操作</th><% } %></tr>
+</thead>
+<tbody>
 <% items.forEach(function(b){ %>
-<tr>
-  <td style="white-space:nowrap"><%= b.occurred_at %></td>
-  <td><%= b.client_name %></td>
-  <td class="muted"><%= b.address %></td>
-  <td class="muted"><%= b.contact %></td>
-  <td class="num amount"><%= comma(b.receivable) %></td>
-  <td class="num amount income"><%= comma(b.paid) %></td>
-  <td class="num amount <%= b.owed_class %>"><%= comma(b.owed) %></td>
-  <td style="white-space:nowrap"><span class="badge <%= b.status === 'settled' ? 'settled' : 'pending' %>"><%= b.status === 'settled' ? '✅ 已结清' : b.status === 'partial' ? '🕐 部分结算' : '⏳ 未结算' %></span></td>
+<tr class="bill-row">
+  <td style="white-space:nowrap" data-label="日期"><%= b.occurred_at %></td>
+  <td data-label="委托方"><%= b.client_name %></td>
+  <td class="muted" data-label="地点"><%= b.address %></td>
+  <td class="muted" data-label="联系人"><%= b.contact %></td>
+  <td class="num amount" data-label="应收"><%= comma(b.receivable) %></td>
+  <td class="num amount income" data-label="已收"><%= comma(b.paid) %></td>
+  <td class="num amount <%= b.owed_class %>" data-label="欠款"><%= comma(b.owed) %></td>
+  <td style="white-space:nowrap" data-label="状态"><span class="badge <%= b.status === 'settled' ? 'settled' : 'pending' %>"><%= b.status === 'settled' ? '✅ 已结清' : b.status === 'partial' ? '🕐 部分结算' : '⏳ 未结算' %></span></td>
   <% if (mode === 'write') { %>
-  <td style="white-space:nowrap">
+  <td class="td-actions">
     <a class="btn icon" href="/w/<%= token %>/work/<%= b.id %>/edit" title="编辑">✏️</a>
     <% if (b.status !== 'settled') { %>
-    <form class="inline" method="post" action="/w/<%= token %>/work/<%= b.id %>/settle">
+    <form class="inline" data-keep method="post" action="/w/<%= token %>/work/<%= b.id %>/settle">
       <input type="number" name="amount" min="0.01" step="0.01" placeholder="收款(元)" style="width:90px" required>
       <button title="记一笔结算">💰 收款</button>
     </form>
     <% } %>
-    <form class="inline" method="post" action="/w/<%= token %>/work/<%= b.id %>/delete"><button class="danger" title="删除">🗑️</button></form>
+    <form class="inline" data-keep method="post" action="/w/<%= token %>/work/<%= b.id %>/delete"><button class="danger" title="删除">🗑️</button></form>
   </td>
   <% } %>
 </tr>
+<tr class="bill-detail-row">
+  <td colspan="<%= mode === 'write' ? 9 : 8 %>" class="td-details">
+    <details>
+      <summary>📋 查看明细</summary>
+      <table class="sub">
+        <thead>
+        <tr><th>品名</th><th class="num">数量</th><th>单位</th><th class="num">单价</th><th class="num">小计</th><th>备注</th></tr>
+        </thead>
+        <tbody>
+        <% (b.items || []).forEach(function(i){ %>
+        <tr><td data-label="品名"><%= i.name %></td><td class="num" data-label="数量"><%= i.qty %></td><td data-label="单位"><%= i.unit %></td><td class="num" data-label="单价"><%= i.unit_price %></td><td class="num" data-label="小计"><%= i.amount %></td><td class="muted" data-label="备注"><%= i.note %></td></tr>
+        <% }) %>
+        </tbody>
+      </table>
+      <% if ((b.settlements || []).length > 0) { %>
+      <p class="muted" style="margin:6px 0 0">💰 结算：<% b.settlements.forEach(function(s){ %><%= s.amount %>元（<%= s.settled_at %><%= s.note ? '，' + s.note : '' %>）；<% }) %></p>
+      <% } %>
+    </details>
+  </td>
+</tr>
 <% }) %>
+</tbody>
 </table>
 </div>
 <div class="muted">共 <%= total %> 张工作账单</div>

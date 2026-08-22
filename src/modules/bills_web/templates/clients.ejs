@@ -1,0 +1,60 @@
+<h1>👥 委托方管理</h1>
+
+<% if (error) { %><div class="error"><%= error %></div><% } %>
+
+<% if (accounts.length === 0) { %>
+  <div class="empty">还没有账本。</div>
+<% } else { %>
+
+<form class="toolbar" method="get" action="/w/<%= token %>/work/clients">
+  <select name="account_id"><%- opt(accounts, accountId, 'work') %></select>
+  <button>切换</button>
+  <a class="btn right" href="/w/<%= token %>/work?account_id=<%= accountId %>">⬅ 返回工作记账</a>
+</form>
+
+<% if (mode === 'write') { %>
+<div class="card">
+  <h2>新增委托方</h2>
+  <form method="post" action="/w/<%= token %>/work/clients">
+    <input type="hidden" name="account_id" value="<%= accountId %>">
+    <div class="toolbar">
+      <input type="text" name="name" placeholder="名称（如 欧派装饰）" required>
+      <select name="type">
+        <option value="company">公司</option>
+        <option value="personal">个人</option>
+      </select>
+      <input type="text" name="phone" placeholder="电话">
+      <input type="text" name="note" placeholder="备注">
+      <button>新增</button>
+    </div>
+  </form>
+</div>
+<% } %>
+
+<% if (clients.length === 0) { %>
+  <div class="empty">还没有委托方。</div>
+<% } else { %>
+<div class="table-wrap">
+<table>
+<tr><th>名称</th><th>类型</th><th>电话</th><th>备注</th><% if (mode === 'write') { %><th>操作</th><% } %></tr>
+<% clients.forEach(function(c){ %>
+<tr>
+  <td><%= c.name %></td>
+  <td><span class="badge <%= c.type === 'company' ? 'settled' : 'pending' %>"><%= c.type === 'company' ? '🏢 公司' : '👤 个人' %></span></td>
+  <td class="muted"><%= c.phone %></td>
+  <td class="muted"><%= c.note %></td>
+  <% if (mode === 'write') { %>
+  <td style="white-space:nowrap">
+    <a class="btn icon" href="/w/<%= token %>/work/clients/<%= c.id %>/edit" title="编辑">✏️</a>
+    <form class="inline" method="post" action="/w/<%= token %>/work/clients/<%= c.id %>/delete">
+      <button class="danger" title="删除（该委托方下有未删除账单时不可删）">🗑️</button>
+    </form>
+  </td>
+  <% } %>
+</tr>
+<% }) %>
+</table>
+</div>
+<% } %>
+
+<% } %>

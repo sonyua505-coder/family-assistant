@@ -1,0 +1,70 @@
+<h1>💰 单价表</h1>
+
+<% if (error) { %><div class="error"><%= error %></div><% } %>
+
+<% if (accounts.length === 0) { %>
+  <div class="empty">还没有账本。</div>
+<% } else { %>
+
+<form class="toolbar" method="get" action="/w/<%= token %>/work/prices">
+  <select name="account_id"><%- opt(accounts, accountId, 'work') %></select>
+  <select name="client_id">
+    <option value="">全部委托方</option>
+    <% clients.forEach(function(c){ %>
+      <option value="<%= c.id %>" <%= String(c.id) === client_id ? 'selected' : '' %>><%= c.name %></option>
+    <% }) %>
+  </select>
+  <button>查看</button>
+  <a class="btn right" href="/w/<%= token %>/work?account_id=<%= accountId %>">⬅ 返回工作记账</a>
+</form>
+
+<% if (mode === 'write') { %>
+<div class="card">
+  <h2>新增 / 更新单价</h2>
+  <form method="post" action="/w/<%= token %>/work/prices">
+    <input type="hidden" name="account_id" value="<%= accountId %>">
+    <div class="toolbar">
+      <select name="client_id" required>
+        <option value="">选择委托方</option>
+        <% clients.forEach(function(c){ %><option value="<%= c.id %>"><%= c.name %></option><% }) %>
+      </select>
+      <input type="text" name="name" placeholder="品名（如 欧派木门）" required>
+      <input type="text" name="unit" placeholder="单位（默认 个）">
+      <input type="number" name="unit_price" min="0" step="0.01" placeholder="单价(元)" required>
+      <input type="text" name="note" placeholder="备注">
+      <button>保存</button>
+    </div>
+  </form>
+  <p class="muted">同一委托方下品名相同会覆盖旧单价。</p>
+</div>
+<% } %>
+
+<% if (prices.length === 0) { %>
+  <div class="empty">暂无单价。</div>
+<% } else { %>
+<div class="table-wrap">
+<table>
+<tr><th>委托方</th><th>品名</th><th>单位</th><th class="num">单价</th><th>备注</th><% if (mode === 'write') { %><th>操作</th><% } %></tr>
+<% prices.forEach(function(p){ %>
+<tr>
+  <td><%= p.client_name %></td>
+  <td><%= p.name %></td>
+  <td class="muted"><%= p.unit %></td>
+  <td class="num amount"><%= comma(p.unit_price) %> 元</td>
+  <td class="muted"><%= p.note %></td>
+  <% if (mode === 'write') { %>
+  <td style="white-space:nowrap">
+    <a class="btn icon" href="/w/<%= token %>/work/prices/<%= p.id %>/edit?account_id=<%= accountId %>" title="编辑">✏️</a>
+    <form class="inline" method="post" action="/w/<%= token %>/work/prices/<%= p.id %>/delete">
+      <input type="hidden" name="account_id" value="<%= accountId %>">
+      <button class="danger" title="删除">🗑️</button>
+    </form>
+  </td>
+  <% } %>
+</tr>
+<% }) %>
+</table>
+</div>
+<% } %>
+
+<% } %>

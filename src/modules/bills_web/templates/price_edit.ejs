@@ -1,0 +1,25 @@
+<h1>✏️ 编辑单价</h1>
+
+<% if (error) { %><div class="error"><%= error %></div><% } %>
+
+<div class="card">
+  <form method="post" action="/w/<%= token %>/work/prices/<%= price.id %>/update">
+    <input type="hidden" name="account_id" value="<%= accountId %>">
+    <div class="toolbar">
+      <select name="client_id" required>
+        <% clients.forEach(function(c){ %>
+          <option value="<%= c.id %>" <%= c.id === price.client_id ? 'selected' : '' %>><%= c.name %></option>
+        <% }) %>
+      </select>
+      <input type="text" name="name" value="<%= price.name %>" placeholder="品名" required>
+      <input type="text" name="unit" value="<%= price.unit %>" placeholder="单位">
+      <input type="number" name="unit_price" min="0" step="0.01" value="<%= price.unit_price %>" placeholder="单价(元)" required>
+      <input type="text" name="note" value="<%= price.note %>" placeholder="备注" style="flex:1">
+    </div>
+    <div class="toolbar">
+      <button>保存修改</button>
+      <a class="btn" href="/w/<%= token %>/work/prices?account_id=<%= accountId %>">返回</a>
+    </div>
+  </form>
+  <div class="muted" style="margin-top:8px">单价 #<%= price.id %> · 品名是主键，改名会新增一条而非覆盖，旧条目请手动删除。</div>
+</div>

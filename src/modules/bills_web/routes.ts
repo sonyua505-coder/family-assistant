@@ -41,7 +41,7 @@ import {
   yuan,
 } from '../bills/bills.js';
 import { buildTaskCsv, createTask, exportTasks, getTask, getTaskAny, listTaskTrash, listTasks, purgeTask, restoreTask, setTaskDone, softDeleteTask, updateTask } from '../tasks/tasks.js';
-import { buildWorkBillsStatementCsv, buildWorkBillsSummaryCsv, createWorkBill, getWorkBillAny, getWorkBillLedger, listClients, listWorkBillTrash, listWorkBills, purgeWorkBill, restoreWorkBill, settleWorkBill, softDeleteWorkBill, updateWorkBill, workBillStats, exportWorkBills } from '../work_bills/work_bills.js';
+import { buildWorkBillsStatementCsv, buildWorkBillsSummaryCsv, createClient, createWorkBill, deleteUnitPrice, exportWorkBills, getClient, getWorkBillAny, getWorkBillLedger, listClients, listUnitPrices, listWorkBillTrash, listWorkBills, purgeWorkBill, restoreWorkBill, settleWorkBill, softDeleteClient, softDeleteWorkBill, updateClient, updateWorkBill, upsertUnitPrice, workBillStats } from '../work_bills/work_bills.js';
 import { listTokens, mintToken, revokeToken, verifyToken } from './tokens.js';
 import { checkRateLimit, clearFailures, recordFailure } from './ratelimit.js';
 import { renderPage, tpl } from './templates.js';
@@ -874,18 +874,29 @@ export async function registerBillsWebRoutes(app: FastifyInstance, deps: BillsWe
         page_size: 200,
       });
       total = t;
-      rows = items.map((b) => ({
-        id: b.id,
-        client_name: b.client_name,
-        address: b.address,
-        contact: b.contact,
-        occurred_at: b.occurred_at,
-        receivable: yuan(b.receivable),
-        paid: yuan(b.paid),
-        owed: yuan(b.owed),
-        owed_class: b.owed > 0 ? 'expense' : '',
-        status: b.status,
-      }));
+      rows = items.map((b) => {
+        // 展开明细（页面 <details> 用）：明细行 + 结算记录，金额转「元」
+        const billItems = (
+          db.prepare('SELECT name, qty, unit, unit_price, amount, note FROM work_bill_items WHERE bill_id = ? ORDER BY sort, id').all(b.id) as Array<{ name: string; qty: number; unit: string; unit_price: number; amount: number; note: string }>
+        ).map((i) => ({ name: i.name, qty: i.qty, unit: i.unit, unit_price: yuan(i.unit_price), amount: yuan(i.amount), note: i.note }));
+        const settlements = (
+          db.prepare('SELECT amount, settled_at, note FROM work_settlements WHERE bill_id = ? ORDER BY id').all(b.id) as Array<{ amount: number; settled_at: string; note: string }>
+        ).map((s) => ({ amount: yuan(s.amount), settled_at: s.settled_at, note: s.note }));
+        return {
+          id: b.id,
+          client_name: b.client_name,
+          address: b.address,
+          contact: b.contact,
+          occurred_at: b.occurred_at,
+          receivable: yuan(b.receivable),
+          paid: yuan(b.paid),
+          owed: yuan(b.owed),
+          owed_class: b.owed > 0 ? 'expense' : '',
+          status: b.status,
+          items: billItems,
+          settlements,
+        };
+      });
     }
     const html = renderPage('工作记账', token, req.web!.mode, tpl.work, {
       accounts: accounts.map((a) => ({ id: a.id, name: a.name })),
@@ -987,7 +998,7 @@ export async function registerBillsWebRoutes(app: FastifyInstance, deps: BillsWe
     const token = (req.params as { token: string }).token;
     const ledger = requireWorkBill(personId, (req.params as { id: string }).id);
     const clients = listClients(db, ledger.bill.account_id);
-    const items = ledger.items.slice(0, 4).map((it) => ({ name: it.name, qty: it.qty, unit: it.unit, unit_price: it.unit_price / 100 }));
+    const items = ledger.items.slice(0, 4).map((it) => ({ name: it.name, qty: it.qty, unit: it.unit, unit_price: it.unit_price / 100, note: it.note }));
     const html = renderPage('编辑工作账单', token, req.web!.mode, tpl.workEdit, {
       bill: { id: ledger.bill.id, client_id: ledger.bill.client_id, address: ledger.bill.address, contact: ledger.bill.contact, occurred_at: ledger.bill.occurred_at, note: ledger.bill.note },
       clients: clients.map((c) => ({ id: c.id, name: c.name })),
@@ -1017,6 +1028,207 @@ export async function registerBillsWebRoutes(app: FastifyInstance, deps: BillsWe
       })!;
       logOperation(db, { personId, accountId: bill.bill.account_id, action: 'work_bill.update', entity: 'work_bills', entityId: bill.bill.id, before: bill.bill, after: updated.bill });
       return redirect(reply, `/w/${token}/work?account_id=${bill.bill.account_id}`);
+    } catch (err) {
+      return fail((err as Error).message);
+    }
+  });
+
+  // ── 委托方管理 ──
+  app.get('/w/:token/work/clients', { preHandler: webAuth }, async (req, reply) => {
+    const { personId } = req.web!;
+    const token = (req.params as { token: string }).token;
+    const q = req.query as Record<string, string | undefined>;
+    const sel = parseAccountSel(q.account_id, 'work');
+    if (sel.series === 'daily') return redirect(reply, `/w/${token}/bills?account_id=${sel.id}`);
+    if (sel.series === 'task') return redirect(reply, `/w/${token}/tasks?account_id=${sel.id}`);
+    const { account, accounts } = webAccount(personId, sel.id);
+    if (!account) return reply.type('text/html; charset=utf-8').send(renderPage('委托方', token, req.web!.mode, tpl.clients, { accounts: [], accountId: 0, clients: [], error: '' }));
+
+    const rows = listClients(db, account.id).map((c) => ({ id: c.id, name: c.name, type: c.type, phone: c.phone, note: c.note }));
+    const html = renderPage('委托方', token, req.web!.mode, tpl.clients, {
+      accounts: accounts.map((a) => ({ id: a.id, name: a.name })),
+      accountId: account.id,
+      clients: rows,
+      error: typeof q.error === 'string' ? q.error : '',
+    });
+    return reply.type('text/html; charset=utf-8').send(html);
+  });
+
+  app.post('/w/:token/work/clients', { preHandler: [webAuth, requireWrite] }, async (req, reply) => {
+    const { personId } = req.web!;
+    const token = (req.params as { token: string }).token;
+    const body = (req.body ?? {}) as Record<string, unknown>;
+    const fail = (msg: string) => redirect(reply, `/w/${token}/work/clients?account_id=${encodeURIComponent(String(body.account_id))}&error=${encodeURIComponent(msg)}`);
+    const accountId = Number(body.account_id);
+    if (!Number.isInteger(accountId) || accountId <= 0) return fail('缺少账本');
+    try {
+      resolveAccountId(db, personId, accountId);
+      const id = createClient(db, accountId, {
+        name: body.name,
+        type: body.type,
+        phone: body.phone,
+        note: body.note,
+      });
+      logOperation(db, { personId, accountId, action: 'work_client.create', entity: 'work_clients', entityId: id, after: getClient(db, id) });
+      return redirect(reply, `/w/${token}/work/clients?account_id=${accountId}`);
+    } catch (err) {
+      return fail((err as Error).message);
+    }
+  });
+
+  app.get('/w/:token/work/clients/:id/edit', { preHandler: [webAuth, requireWrite] }, async (req, reply) => {
+    const { personId } = req.web!;
+    const token = (req.params as { token: string }).token;
+    const client = requireClient(personId, (req.params as { id: string }).id);
+    const html = renderPage('编辑委托方', token, req.web!.mode, tpl.clientEdit, {
+      client: { id: client.id, name: client.name, type: client.type, phone: client.phone, note: client.note },
+      accountId: client.account_id,
+      error: typeof (req.query as Record<string, string | undefined>).error === 'string' ? (req.query as Record<string, string | undefined>).error : '',
+    });
+    return reply.type('text/html; charset=utf-8').send(html);
+  });
+
+  app.post('/w/:token/work/clients/:id/update', { preHandler: [webAuth, requireWrite] }, async (req, reply) => {
+    const { personId } = req.web!;
+    const token = (req.params as { token: string }).token;
+    const client = requireClient(personId, (req.params as { id: string }).id);
+    const body = (req.body ?? {}) as Record<string, unknown>;
+    const fail = (msg: string) => redirect(reply, `/w/${token}/work/clients/${client.id}/edit?error=${encodeURIComponent(msg)}`);
+    try {
+      const updated = updateClient(db, client.id, { name: body.name, type: body.type, phone: body.phone, note: body.note })!;
+      logOperation(db, { personId, accountId: client.account_id, action: 'work_client.update', entity: 'work_clients', entityId: client.id, before: client, after: updated });
+      return redirect(reply, `/w/${token}/work/clients?account_id=${client.account_id}`);
+    } catch (err) {
+      return fail((err as Error).message);
+    }
+  });
+
+  app.post('/w/:token/work/clients/:id/delete', { preHandler: [webAuth, requireWrite] }, async (req, reply) => {
+    const { personId } = req.web!;
+    const token = (req.params as { token: string }).token;
+    const client = requireClient(personId, (req.params as { id: string }).id);
+    const fail = (msg: string) => redirect(reply, `/w/${token}/work/clients?account_id=${client.account_id}&error=${encodeURIComponent(msg)}`);
+    try {
+      softDeleteClient(db, client.id);
+      logOperation(db, { personId, accountId: client.account_id, action: 'work_client.delete', entity: 'work_clients', entityId: client.id, before: client });
+      return redirect(reply, `/w/${token}/work/clients?account_id=${client.account_id}`);
+    } catch (err) {
+      return fail((err as Error).message);
+    }
+  });
+
+  // ── 单价表管理 ──
+  app.get('/w/:token/work/prices', { preHandler: webAuth }, async (req, reply) => {
+    const { personId } = req.web!;
+    const token = (req.params as { token: string }).token;
+    const q = req.query as Record<string, string | undefined>;
+    const sel = parseAccountSel(q.account_id, 'work');
+    if (sel.series === 'daily') return redirect(reply, `/w/${token}/bills?account_id=${sel.id}`);
+    if (sel.series === 'task') return redirect(reply, `/w/${token}/tasks?account_id=${sel.id}`);
+    const { account, accounts } = webAccount(personId, sel.id);
+    if (!account) return reply.type('text/html; charset=utf-8').send(renderPage('单价表', token, req.web!.mode, tpl.prices, { accounts: [], accountId: 0, clients: [], prices: [], error: '', client_id: '' }));
+
+    const clients = listClients(db, account.id);
+    const clientFilter = q.client_id !== undefined && Number(q.client_id) > 0 ? Number(q.client_id) : undefined;
+    const prices = listUnitPrices(db, account.id, { client_id: clientFilter }).map((p) => {
+      const c = clients.find((x) => x.id === p.client_id);
+      return { id: p.id, client_id: p.client_id, client_name: c?.name ?? `委托方#${p.client_id}`, name: p.name, unit: p.unit, unit_price: yuan(p.unit_price), note: p.note };
+    });
+    const html = renderPage('单价表', token, req.web!.mode, tpl.prices, {
+      accounts: accounts.map((a) => ({ id: a.id, name: a.name })),
+      accountId: account.id,
+      clients: clients.map((c) => ({ id: c.id, name: c.name })),
+      prices,
+      client_id: q.client_id ?? '',
+      error: typeof q.error === 'string' ? q.error : '',
+    });
+    return reply.type('text/html; charset=utf-8').send(html);
+  });
+
+  app.post('/w/:token/work/prices', { preHandler: [webAuth, requireWrite] }, async (req, reply) => {
+    const { personId } = req.web!;
+    const token = (req.params as { token: string }).token;
+    const body = (req.body ?? {}) as Record<string, unknown>;
+    const accountId = Number(body.account_id);
+    const fail = (msg: string) => redirect(reply, `/w/${token}/work/prices?account_id=${accountId}&error=${encodeURIComponent(msg)}`);
+    if (!Number.isInteger(accountId) || accountId <= 0) return fail('缺少账本');
+    try {
+      resolveAccountId(db, personId, accountId);
+      const priceYuan = body.unit_price !== undefined && body.unit_price !== '' ? Number(body.unit_price) : NaN;
+      if (!Number.isFinite(priceYuan) || priceYuan < 0) return fail('单价非法');
+      const row = upsertUnitPrice(db, accountId, {
+        client_id: body.client_id,
+        name: body.name,
+        unit: body.unit,
+        unit_price: Math.round(priceYuan * 100),
+        note: body.note,
+      });
+      logOperation(db, { personId, accountId, action: 'work_unit_price.upsert', entity: 'work_unit_prices', entityId: row.id, after: row });
+      return redirect(reply, `/w/${token}/work/prices?account_id=${accountId}`);
+    } catch (err) {
+      return fail((err as Error).message);
+    }
+  });
+
+  app.get('/w/:token/work/prices/:id/edit', { preHandler: [webAuth, requireWrite] }, async (req, reply) => {
+    const { personId } = req.web!;
+    const token = (req.params as { token: string }).token;
+    const id = Number((req.params as { id: string }).id);
+    const q = req.query as Record<string, string | undefined>;
+    const sel = parseAccountSel(q.account_id, 'work');
+    const { account } = webAccount(personId, sel.id);
+    if (!account) throw new AppError(404, 'ACCOUNT_NOT_FOUND', '找不到该账本');
+    const price = listUnitPrices(db, account.id, {}).find((p) => p.id === id);
+    if (!price) throw new AppError(404, 'UNIT_PRICE_NOT_FOUND', '单价不存在');
+    const clients = listClients(db, account.id);
+    const html = renderPage('编辑单价', token, req.web!.mode, tpl.priceEdit, {
+      price: { id: price.id, client_id: price.client_id, name: price.name, unit: price.unit, unit_price: yuan(price.unit_price), note: price.note },
+      clients: clients.map((c) => ({ id: c.id, name: c.name })),
+      accountId: account.id,
+      error: typeof q.error === 'string' ? q.error : '',
+    });
+    return reply.type('text/html; charset=utf-8').send(html);
+  });
+
+  app.post('/w/:token/work/prices/:id/update', { preHandler: [webAuth, requireWrite] }, async (req, reply) => {
+    const { personId } = req.web!;
+    const token = (req.params as { token: string }).token;
+    const body = (req.body ?? {}) as Record<string, unknown>;
+    const accountId = Number(body.account_id);
+    const fail = (msg: string) => redirect(reply, `/w/${token}/work/prices/${Number((req.params as { id: string }).id)}/edit?account_id=${accountId}&error=${encodeURIComponent(msg)}`);
+    if (!Number.isInteger(accountId) || accountId <= 0) return fail('缺少账本');
+    try {
+      resolveAccountId(db, personId, accountId);
+      const priceYuan = body.unit_price !== undefined && body.unit_price !== '' ? Number(body.unit_price) : NaN;
+      if (!Number.isFinite(priceYuan) || priceYuan < 0) return fail('单价非法');
+      const row = upsertUnitPrice(db, accountId, {
+        client_id: body.client_id,
+        name: body.name,
+        unit: body.unit,
+        unit_price: Math.round(priceYuan * 100),
+        note: body.note,
+      });
+      logOperation(db, { personId, accountId, action: 'work_unit_price.upsert', entity: 'work_unit_prices', entityId: row.id, after: row });
+      return redirect(reply, `/w/${token}/work/prices?account_id=${accountId}`);
+    } catch (err) {
+      return fail((err as Error).message);
+    }
+  });
+
+  app.post('/w/:token/work/prices/:id/delete', { preHandler: [webAuth, requireWrite] }, async (req, reply) => {
+    const { personId } = req.web!;
+    const token = (req.params as { token: string }).token;
+    const id = Number((req.params as { id: string }).id);
+    const body = (req.body ?? {}) as Record<string, unknown>;
+    const accountId = Number(body.account_id);
+    const fail = (msg: string) => redirect(reply, `/w/${token}/work/prices?account_id=${accountId}&error=${encodeURIComponent(msg)}`);
+    if (!Number.isInteger(accountId) || accountId <= 0) return fail('缺少账本');
+    try {
+      resolveAccountId(db, personId, accountId);
+      const row = deleteUnitPrice(db, id, accountId);
+      if (!row) return fail('单价不存在');
+      logOperation(db, { personId, accountId, action: 'work_unit_price.delete', entity: 'work_unit_prices', entityId: id, before: row });
+      return redirect(reply, `/w/${token}/work/prices?account_id=${accountId}`);
     } catch (err) {
       return fail((err as Error).message);
     }
@@ -1058,7 +1270,7 @@ export async function registerBillsWebRoutes(app: FastifyInstance, deps: BillsWe
     const q = req.query as Record<string, string | undefined>;
     const { account } = webAccount(personId, q.account_id !== undefined ? Number(q.account_id) : undefined);
     if (!account) throw new AppError(404, 'ACCOUNT_NOT_FOUND', '找不到该账本');
-    const mode = q.mode === 'statement' ? 'statement' : 'summary';
+    const mode = q.mode === 'summary' ? 'summary' : 'statement';  // 默认带算式（statement），?mode=summary 取简表
     const status = q.status && ['unsettled', 'partial', 'settled'].includes(q.status) ? q.status : undefined;
     const clientId = q.client_id !== undefined && Number(q.client_id) > 0 ? Number(q.client_id) : undefined;
     const keyword = q.keyword || undefined;
@@ -1094,13 +1306,13 @@ export async function registerBillsWebRoutes(app: FastifyInstance, deps: BillsWe
 </body></html>`;
   }
 
-  /** 从表单解析工作账单明细（i0_name/i0_qty/i0_unit/i0_unit_price…；空品名行跳过；单价元→分）。 */
-  function parseWorkItems(body: Record<string, unknown>): Array<{ name: string; qty?: number; unit?: string; unit_price?: number }> {
-    const out: Array<{ name: string; qty?: number; unit?: string; unit_price?: number }> = [];
+  /** 从表单解析工作账单明细（i0_name/i0_qty/i0_unit/i0_unit_price/i0_note…；空品名行跳过；单价元→分）。 */
+  function parseWorkItems(body: Record<string, unknown>): Array<{ name: string; qty?: number; unit?: string; unit_price?: number; note?: string }> {
+    const out: Array<{ name: string; qty?: number; unit?: string; unit_price?: number; note?: string }> = [];
     for (let i = 0; i < 8; i++) {
       const name = String(body[`i${i}_name`] ?? '').trim();
       if (!name) continue;
-      const item: { name: string; qty?: number; unit?: string; unit_price?: number } = { name };
+      const item: { name: string; qty?: number; unit?: string; unit_price?: number; note?: string } = { name };
       const qtyRaw = body[`i${i}_qty`];
       if (qtyRaw !== undefined && qtyRaw !== '') {
         const q = Number(qtyRaw);
@@ -1113,6 +1325,8 @@ export async function registerBillsWebRoutes(app: FastifyInstance, deps: BillsWe
         const p = Number(priceRaw);
         if (Number.isFinite(p) && p >= 0) item.unit_price = Math.round(p * 100);
       }
+      const noteRaw = body[`i${i}_note`];
+      if (noteRaw !== undefined && String(noteRaw).trim()) item.note = String(noteRaw).trim();
       out.push(item);
     }
     return out;
@@ -1156,6 +1370,16 @@ export async function registerBillsWebRoutes(app: FastifyInstance, deps: BillsWe
     if (!bill) throw new AppError(404, 'WORK_BILL_NOT_FOUND', '账单不存在');
     resolveAccountId(db, personId, bill.account_id); // 越权 403
     return bill;
+  }
+
+  /** 取一条未删除委托方并校验当前 person 对其账户有访问权。 */
+  function requireClient(personId: number, rawId: string) {
+    const id = Number(rawId);
+    if (!Number.isInteger(id) || id <= 0) throw new AppError(400, 'INVALID_ID', 'id 非法');
+    const client = getClient(db, id);
+    if (!client) throw new AppError(404, 'WORK_CLIENT_NOT_FOUND', '委托方不存在或已删除');
+    resolveAccountId(db, personId, client.account_id); // 越权 403
+    return client;
   }
 
   /** 取一条未删除账单并校验当前 person 对其账户有访问权。 */

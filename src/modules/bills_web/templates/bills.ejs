@@ -64,32 +64,37 @@
   <div class="empty">暂无账单</div>
 <% } else { %>
 <div class="table-wrap">
-<table>
+<table class="card-list">
+<thead>
 <tr><th>日期</th><th>分类</th><th>备注</th><th class="num">金额</th><th>状态</th><th>参与人</th><% if (mode === 'write') { %><th>操作</th><% } %></tr>
+</thead>
+<tbody>
 <% items.forEach(function(b){ %>
 <tr>
-  <td style="white-space:nowrap"><%= b.occurred_at %></td>
-  <td><span class="cat cat-<%= b.category %>"><%= b.category %></span></td>
-  <td><%= b.note %></td>
-  <td class="num amount <%= b.type === 'income' ? 'income' : 'expense' %>"><%= b.type === 'income' ? '+' : '-' %><%= comma(b.amountYuan) %></td>
-  <td><span class="badge <%= b.status %>"><%= b.status === 'pending' ? '🕐 待结算' : '✅ 已结清' %></span></td>
-  <td class="muted"><%= b.participantsText %></td>
+  <td style="white-space:nowrap" data-label="日期"><%= b.occurred_at %></td>
+  <td data-label="分类"><span class="cat cat-<%= b.category %>"><%= b.category %></span></td>
+  <td data-label="备注"><%= b.note %></td>
+  <td class="num amount <%= b.type === 'income' ? 'income' : 'expense' %>" data-label="金额"><%= b.type === 'income' ? '+' : '-' %><%= comma(b.amountYuan) %></td>
+  <td style="white-space:nowrap" data-label="状态"><span class="badge <%= b.status %>"><%= b.status === 'pending' ? '🕐 待结算' : '✅ 已结清' %></span></td>
+  <td class="muted" data-label="参与人"><%= b.participantsText %></td>
   <% if (mode === 'write') { %>
-  <td style="white-space:nowrap">
+  <td class="td-actions">
     <a class="btn icon" href="/w/<%= token %>/bills/<%= b.id %>/edit" title="编辑账单">✏️</a>
-    <form class="inline" method="post" action="/w/<%= token %>/bills/<%= b.id %>/delete">
-      <button class="danger" title="软删除，可回收站恢复">🗑️</button>
-    </form>
-    <% if (b.status === 'pending') { %>
-      <form class="inline" method="post" action="/w/<%= token %>/bills/<%= b.id %>/settle">
+	<% if (b.status === 'pending') { %>
+      <form class="inline" data-keep method="post" action="/w/<%= token %>/bills/<%= b.id %>/settle">
         <input type="hidden" name="all" value="1">
         <button title="全部参与人已付">✅ 结清</button>
       </form>
     <% } %>
+    <form class="inline" data-keep method="post" action="/w/<%= token %>/bills/<%= b.id %>/delete">
+      <button class="danger" title="软删除，可回收站恢复">🗑️</button>
+    </form>
+ 
   </td>
   <% } %>
 </tr>
 <% }) %>
+</tbody>
 </table>
 </div>
 <div class="pager">

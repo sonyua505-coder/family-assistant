@@ -4,28 +4,59 @@
 
 <div class="card">
   <form method="post" action="/w/<%= token %>/work/<%= bill.id %>/update">
-    <div class="toolbar">
-      <select name="client_id" required>
-        <% clients.forEach(function(c){ %><option value="<%= c.id %>" <%= c.id === bill.client_id ? 'selected' : '' %>><%= c.name %></option><% }) %>
-      </select>
-      <input type="text" name="address" value="<%= bill.address %>" placeholder="安装地点">
-      <input type="text" name="contact" value="<%= bill.contact %>" placeholder="联系人">
-      <input type="date" name="occurred_at" value="<%= bill.occurred_at %>">
+    <div class="form-section">
+      <div class="form-section-title">基本信息</div>
+      <div class="form-grid">
+        <label class="field"><span>委托方</span>
+          <select name="client_id" required>
+            <% clients.forEach(function(c){ %><option value="<%= c.id %>" <%= c.id === bill.client_id ? 'selected' : '' %>><%= c.name %></option><% }) %>
+          </select>
+        </label>
+        <label class="field"><span>日期</span>
+          <input type="date" name="occurred_at" value="<%= bill.occurred_at %>">
+        </label>
+        <label class="field"><span>安装地点</span>
+          <input type="text" name="address" value="<%= bill.address %>" placeholder="如 XX小区3栋501">
+        </label>
+        <label class="field"><span>联系人</span>
+          <input type="text" name="contact" value="<%= bill.contact %>" placeholder="联系人">
+        </label>
+      </div>
     </div>
-    <p class="muted" style="margin:10px 0 6px">安装内容（最多 4 行，品名留空的行忽略；单价单位：元，留空按委托方单价表带出）</p>
-    <% for (var i = 0; i < 4; i++) { var it = items[i] || {}; %>
-    <div class="toolbar">
-      <input type="text" name="i<%= i %>_name" value="<%= it.name || '' %>" placeholder="品名">
-      <input type="number" name="i<%= i %>_qty" min="0" step="0.01" value="<%= it.qty != null ? it.qty : '' %>" placeholder="数量">
-      <input type="text" name="i<%= i %>_unit" value="<%= it.unit || '' %>" placeholder="单位">
-      <input type="number" name="i<%= i %>_unit_price" min="0" step="0.01" value="<%= it.unit_price != null ? it.unit_price : '' %>" placeholder="单价(元)">
+    <div class="form-section">
+      <div class="form-section-title">安装内容</div>
+      <% for (var i = 0; i < 4; i++) { var it = items[i] || {}; %>
+      <div class="item-card">
+        <p class="item-card-title">第 <%= i + 1 %> 行</p>
+        <div class="form-grid">
+          <label class="field"><span>品名</span>
+            <input type="text" name="i<%= i %>_name" value="<%= it.name || '' %>" placeholder="如 欧派木门">
+          </label>
+          <label class="field"><span>数量</span>
+            <input type="number" name="i<%= i %>_qty" min="0" step="0.01" value="<%= it.qty != null ? it.qty : '' %>" placeholder="数量">
+          </label>
+          <label class="field"><span>单位</span>
+            <input type="text" name="i<%= i %>_unit" value="<%= it.unit || '' %>" placeholder="单位">
+          </label>
+          <label class="field"><span>单价（元）</span>
+            <input type="number" name="i<%= i %>_unit_price" min="0" step="0.01" value="<%= it.unit_price != null ? it.unit_price : '' %>" placeholder="单价(元)">
+          </label>
+        </div>
+        <label class="field" style="margin-top:8px"><span>明细备注</span>
+          <input type="text" name="i<%= i %>_note" value="<%= it.note || '' %>" placeholder="该行备注（可选）">
+        </label>
+      </div>
+      <% } %>
+      <p class="muted">最多 4 行，品名留空的行忽略；单价单位：元，留空按委托方单价表带出。保存后安装内容全量替换。</p>
     </div>
-    <% } %>
-    <div class="toolbar">
-      <input type="text" name="note" value="<%= bill.note %>" placeholder="整单备注（可选）" style="flex:1">
-      <button>保存修改</button>
-      <a class="btn" href="/w/<%= token %>/work?account_id=<%= accountId %>">返回</a>
+    <div class="form-section">
+      <div class="form-section-title">整单备注</div>
+      <div class="form-row">
+        <input type="text" name="note" value="<%= bill.note %>" placeholder="整单备注（可选）" style="flex:1">
+        <button>保存修改</button>
+        <a class="btn" href="/w/<%= token %>/work?account_id=<%= accountId %>">返回</a>
+      </div>
     </div>
   </form>
-  <div class="muted" style="margin-top:8px">工作账单 #<%= bill.id %> · 安装内容全量替换，空品名行忽略。</div>
+  <div class="muted" style="margin-top:8px">工作账单 #<%= bill.id %></div>
 </div>

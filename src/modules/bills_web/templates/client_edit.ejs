@@ -1,0 +1,22 @@
+<h1>✏️ 编辑委托方</h1>
+
+<% if (error) { %><div class="error"><%= error %></div><% } %>
+
+<div class="card">
+  <form method="post" action="/w/<%= token %>/work/clients/<%= client.id %>/update">
+    <div class="toolbar">
+      <input type="text" name="name" value="<%= client.name %>" placeholder="名称" required>
+      <select name="type">
+        <option value="company" <%= client.type === 'company' ? 'selected' : '' %>>公司</option>
+        <option value="personal" <%= client.type === 'personal' ? 'selected' : '' %>>个人</option>
+      </select>
+      <input type="text" name="phone" value="<%= client.phone %>" placeholder="电话">
+      <input type="text" name="note" value="<%= client.note %>" placeholder="备注" style="flex:1">
+    </div>
+    <div class="toolbar">
+      <button>保存修改</button>
+      <a class="btn" href="/w/<%= token %>/work/clients?account_id=<%= accountId %>">返回</a>
+    </div>
+  </form>
+  <div class="muted" style="margin-top:8px">委托方 #<%= client.id %></div>
+</div>

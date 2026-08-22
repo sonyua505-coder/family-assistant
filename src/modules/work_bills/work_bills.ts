@@ -650,7 +650,7 @@ export function buildWorkBillsSummaryCsv(bills: WorkBillExportOut[]): string {
   return rows.map((row) => row.map(csvCell).join(',')).join('\r\n');
 }
 
-/** 结账版 CSV：一单一列（含式子 + 对账）。 */
+/** 结账版 CSV：一单一列（含式子 + 对账），末尾追加总计行（合计应收/已收/欠款）。 */
 export function buildWorkBillsStatementCsv(bills: WorkBillExportOut[]): string {
   const header = ['委托方', '地址', '联系人', '日期', '明细式子', '计算总额(元)', '实际应收(元)', '已收(元)', '欠款(元)', '状态'];
   const rows = bills.map((b) => [
@@ -665,6 +665,31 @@ export function buildWorkBillsStatementCsv(bills: WorkBillExportOut[]): string {
     yuan(b.owed),
     b.status === 'settled' ? '已结算' : b.status === 'partial' ? '部分结算' : '未结算',
   ]);
+  // 总计行（口径与 calcLedger 一致：应收/已收/欠款合计）
+  if (bills.length > 0) {
+    const sum = bills.reduce(
+      (acc, b) => {
+        acc.computed_total += b.computed_total;
+        acc.receivable += b.receivable;
+        acc.paid += b.paid;
+        acc.owed += b.owed;
+        return acc;
+      },
+      { computed_total: 0, receivable: 0, paid: 0, owed: 0 },
+    );
+    rows.push([
+      '合计',
+      '',
+      '',
+      `${bills.length} 单`,
+      '',
+      yuan(sum.computed_total),
+      yuan(sum.receivable),
+      yuan(sum.paid),
+      yuan(sum.owed),
+      '',
+    ]);
+  }
   return [header, ...rows].map((row) => row.map(csvCell).join(',')).join('\r\n');
 }
 

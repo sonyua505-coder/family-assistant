@@ -30,6 +30,10 @@ export const tpl = {
   workEdit: load('work_edit.ejs'),
   taskStats: load('task_stats.ejs'),
   workStats: load('work_stats.ejs'),
+  clients: load('clients.ejs'),
+  clientEdit: load('client_edit.ejs'),
+  prices: load('prices.ejs'),
+  priceEdit: load('price_edit.ejs'),
 };
 
 /** HTML 转义（helper 生成的属性/文本用）。 */
@@ -120,6 +124,10 @@ const NAV_BY_TEMPLATE = new Map<ejs.TemplateFunction, string>([
   [tpl.edit, 'bills'],
   [tpl.taskEdit, 'tasks'],
   [tpl.workEdit, 'work'],
+  [tpl.clients, 'work'],
+  [tpl.clientEdit, 'work'],
+  [tpl.prices, 'work'],
+  [tpl.priceEdit, 'work'],
 ]);
 
 /** 渲染完整页面：子模板 → body（已转义），再套 layout。accountId 透传给 layout（nav 跨页保持账本）。

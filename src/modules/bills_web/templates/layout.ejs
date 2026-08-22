@@ -45,6 +45,20 @@ h1{font-size:21px;margin:2px 0 16px;font-weight:800}
 table{width:100%;border-collapse:collapse;font-size:14px}
 .table-wrap{overflow-x:auto;-webkit-overflow-scrolling:touch}
 th,td{padding:10px 12px;border-bottom:1px solid #eef1f7;text-align:left;vertical-align:middle}
+table.sub{width:auto;min-width:100%;font-size:13px;margin:6px 0 2px;background:#fff;border:1px solid #eef1f7;border-radius:6px}
+table.sub th,table.sub td{padding:4px 8px;border-bottom:1px solid #f0f2f7}
+table.sub th{background:transparent;font-size:12px;font-weight:600}
+table.sub tr:last-child th,table.sub tr:last-child td{border-bottom:none}
+details summary{cursor:pointer;color:var(--primary);font-size:13px;user-select:none;list-style:none}
+details summary::-webkit-details-marker{display:none}
+details summary::before{content:'▸ ';color:var(--muted)}
+details[open] summary::before{content:'▾ '}
+details summary:hover{text-decoration:underline}
+/* 操作列不换行；全宽明细展开行 */
+td.td-actions{white-space:nowrap}
+td.td-details details{width:100%}
+td.td-details details summary{white-space:nowrap}
+td.td-details table.sub{margin-top:8px}
 th{color:var(--muted);font-weight:600;font-size:13px;white-space:nowrap;background:#fafbfe;border-bottom:2px solid var(--border)}
 tbody tr:nth-child(even){background:#fafbfe}
 tbody tr:hover{background:var(--primary-soft)}
@@ -98,6 +112,18 @@ a.btn.danger{border-color:var(--red);color:var(--red)}
 a.btn.danger:hover{background:var(--red-soft)}
 a.btn.right{margin-left:auto}
 a.btn.icon{padding:7px 10px;line-height:1}
+/* 表单分组（工作账单新建/编辑用） */
+.form-section{margin:0 0 18px}
+.form-section-title{font-size:14px;font-weight:800;margin:0 0 12px;padding-bottom:8px;border-bottom:2px solid var(--border);display:flex;align-items:center;gap:8px}
+.form-section-title::before{content:"";width:4px;height:14px;background:var(--primary);border-radius:2px;flex:none}
+.form-grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(140px,1fr));gap:10px 12px}
+.field{display:flex;flex-direction:column;gap:5px}
+.field>span{font-size:12px;font-weight:600;color:var(--muted)}
+.field input,.field select{width:100%}
+.item-card{border:1px solid var(--border);border-radius:var(--radius-sm);padding:12px;margin-bottom:12px;background:#fbfcff}
+.item-card-title{font-size:12px;font-weight:800;color:var(--muted);margin:0 0 10px;display:flex;align-items:center;gap:6px}
+.item-card-title::before{content:"";width:8px;height:8px;border-radius:2px;background:var(--primary);flex:none}
+.form-row{display:flex;gap:10px;align-items:center;flex-wrap:wrap}
 /* 移动端 */
 @media (max-width:640px){
   nav{padding:8px 10px;gap:2px}
@@ -111,6 +137,32 @@ a.btn.icon{padding:7px 10px;line-height:1}
   .toolbar{gap:6px}
   .toolbar input,.toolbar select,.toolbar button{flex:1 1 auto;min-width:0}
   button{white-space:nowrap}
+  /* 表格 → 卡片（仅带 .card-list 的列表表） */
+  table.card-list{display:block}
+  table.card-list thead{display:none}
+  table.card-list tbody{display:block}
+  table.card-list>tbody>tr{display:grid;grid-template-columns:repeat(2,1fr);gap:3px 12px;padding:12px;margin:0 0 12px;background:var(--card);border:1px solid var(--border);border-radius:var(--radius);box-shadow:var(--shadow)}
+  table.card-list>tbody>tr:nth-child(even){background:var(--card)}
+  table.card-list>tbody>tr:hover{background:var(--card)}
+  table.card-list td{display:flex;justify-content:space-between;align-items:baseline;gap:10px;padding:2px 0;border:none;font-size:13px}
+  table.card-list td::before{content:attr(data-label);color:var(--muted);font-size:12px;font-weight:600;flex:none}
+  table.card-list td.num{text-align:left}
+  table.card-list td.td-actions{grid-column:1 / -1;display:flex;flex-wrap:wrap;align-items:center;gap:8px;padding-top:8px;margin-top:6px;border-top:1px dashed var(--border)}
+  table.card-list td.td-actions::before{display:none}
+  /* 全宽明细展开行：移动端压成卡片下方的展开条 */
+  table.card-list>tbody>tr.bill-detail-row{display:block;padding:0;margin:-4px 0 12px;background:transparent;border:none;box-shadow:none}
+  table.card-list>tbody>tr.bill-detail-row:hover{background:transparent}
+  table.card-list>tbody>tr.bill-detail-row>td{display:block;padding:0;border:none}
+  table.card-list>tbody>tr.bill-detail-row>td::before{display:none}
+  table.card-list>tbody>tr.bill-detail-row details{width:100%}
+  table.card-list>tbody>tr.bill-detail-row summary{display:inline-block;padding:2px 0;font-size:13px}
+  /* 明细子表 → 卡片 */
+  table.sub{min-width:0;background:transparent;border:none}
+  table.sub thead{display:none}
+  table.sub tbody{display:block}
+  table.sub>tbody>tr{display:grid;grid-template-columns:repeat(2,1fr);gap:3px 10px;padding:8px 10px;margin:6px 0;background:var(--bg-bottom);border:1px solid var(--border);border-radius:var(--radius-sm)}
+  table.sub td{display:flex;justify-content:space-between;gap:8px;border:none;padding:2px 0;font-size:12.5px}
+  table.sub td::before{content:attr(data-label);color:var(--muted);font-size:12px;font-weight:600;flex:none}
 }
 </style>
 </head>
@@ -125,5 +177,34 @@ a.btn.icon{padding:7px 10px;line-height:1}
   <span class="mode"><%= mode === 'write' ? '✏️ 可写' : '👁️ 只读' %></span>
 </nav>
 <main><%- body %></main>
+<script>
+/* 保留状态：action 表单（data-keep）提交后原地刷新，保留当前 URL 的筛选参数与滚动位置。
+   注意：模板在进程启动时编译一次，改动 layout/work 等 .ejs 后需重启 dev 进程（tsx watch 不监听 .ejs）。 */
+(function () {
+  var KEY = 'keep-scroll';
+  function saved() {
+    try { var s = sessionStorage.getItem(KEY); return s === null ? null : (Number(s) || 0); } catch (e) { return null; }
+  }
+  var y = saved();
+  if (y !== null) {
+    window.scrollTo(0, y);                       // 立即恢复
+    window.addEventListener('load', function () { // 布局定稿后再滚一次并清除标记
+      try { sessionStorage.removeItem(KEY); } catch (e) {}
+      window.scrollTo(0, y);
+    });
+  }
+  document.addEventListener('submit', function (ev) {
+    var f = ev.target;
+    if (!f || !f.matches || !f.matches('form[data-keep]')) return;
+    if (typeof f.checkValidity === 'function' && !f.checkValidity()) { f.reportValidity(); ev.preventDefault(); return; }
+    ev.preventDefault();
+    var py = window.pageYOffset !== undefined ? window.pageYOffset : document.documentElement.scrollTop;
+    try { sessionStorage.setItem(KEY, String(py || 0)); } catch (e) {}
+    fetch(f.action, { method: 'POST', body: new URLSearchParams(new FormData(f)), headers: { 'Content-Type': 'application/x-www-form-urlencoded' }, redirect: 'manual' })
+      .catch(function () {})
+      .then(function () { window.location.reload(); });
+  });
+})();
+</script>
 </body>
 </html>

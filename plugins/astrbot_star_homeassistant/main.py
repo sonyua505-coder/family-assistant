@@ -333,7 +333,9 @@ class HomeAssistantStar(Star):
             acc = "，".join(
                 f"{a.get('name')}(#{a.get('id')})" for a in accounts
             ) or "无（请先创建账本）"
-            return f"已登记：{name}。可用账本：{acc}"
+            pid = p.get("id")
+        id_hint = f"，person_id={pid}" if pid is not None else ""
+        return f"已登记：{name}{id_hint}。可用账本：{acc}"
         return "该用户尚未登记身份。请先询问用户希望怎么称呼，然后调用 create_person 登记。"
 
     @filter.llm_tool(name="create_person")
@@ -1918,10 +1920,10 @@ class HomeAssistantStar(Star):
 
     @filter.llm_tool(name="bind_person")
     async def bind_person(self, event: AstrMessageEvent, person_id: int) -> str:
-        """把当前用户绑定到已有的账号（如家人把你拉进家庭）。
+        """把当前平台身份绑定到已有的 person（合并多平台身份：QQ 与微信属于同一个人时用）。
 
         Args:
-            person_id(number): 要绑定的账号 id。
+            person_id(number): 目标 person 记录 id（当前身份将被归入该 person）。
         """
         data = await self._api(
             "POST", f"api/v1/persons/{person_id}/bind", identity=self._identity(event),

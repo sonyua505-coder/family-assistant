@@ -29,3 +29,9 @@ deploy/
 
 # WorkBuddy 项目内部数据（记忆/会话产物，不随代码库分发）
 .workbuddy/
+
+# 内部文档（本地自持，不随公开仓库分发；历史提交中仍可见）
+docs/下一阶段开发方向.md
+docs/云端接入与维护手册.md
+docs/项目解析.md
+docs/BOT工作区机制.md
